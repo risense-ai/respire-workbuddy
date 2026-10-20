@@ -1,0 +1,17 @@
+{
+  "name": "risense",
+  "owner": {
+    "name": "risense-ai"
+  },
+  "metadata": {
+    "description": "risense-ai WorkBuddy plugins",
+    "version": "1.0.0"
+  },
+  "plugins": [
+    {
+      "name": "respire",
+      "source": "./",
+      "description": "respire memory for WorkBuddy: title-tier recall every round, one-prefix store, model-optional degradation."
+    }
+  ]
+}

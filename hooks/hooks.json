@@ -1,0 +1,42 @@
+{
+  "description": "respire memory hooks for WorkBuddy: install guide on first run, then SessionStart rules / per-round title-tier recall / Stop store check. Review these hooks before trusting them.",
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "startup|resume|clear|compact",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CODEBUDDY_PLUGIN_ROOT}/hooks/respire.py\" SessionStart || python \"${CODEBUDDY_PLUGIN_ROOT}/hooks/respire.py\" SessionStart",
+            "timeout": 20,
+            "statusMessage": "respire: 注入记忆层简则"
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CODEBUDDY_PLUGIN_ROOT}/hooks/respire.py\" UserPromptSubmit || python \"${CODEBUDDY_PLUGIN_ROOT}/hooks/respire.py\" UserPromptSubmit",
+            "timeout": 20,
+            "statusMessage": "respire: 检索记忆中"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CODEBUDDY_PLUGIN_ROOT}/hooks/respire.py\" Stop || python \"${CODEBUDDY_PLUGIN_ROOT}/hooks/respire.py\" Stop",
+            "timeout": 20,
+            "statusMessage": "respire: 存储检查"
+          }
+        ]
+      }
+    ]
+  }
+}
