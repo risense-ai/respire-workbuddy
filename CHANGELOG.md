@@ -4,7 +4,7 @@
 
 首版：respire 由 Dim 插件移植为 WorkBuddy 标准插件。
 
-- 形态：`.codebuddy-plugin/plugin.json`（WorkBuddy 清单）＋ `.codebuddy-plugin/marketplace.json`（本仓自为市场，source `./`），按 WorkBuddy 插件市场标准安装，无自定义 install.sh。
+- 形态：标准两层——仓根 `.codebuddy-plugin/marketplace.json`（市场清单，市场名 `risense-workbuddy`）＋ `plugins/respire/.codebuddy-plugin/plugin.json`（插件清单），市场条目 `source: "./plugins/respire"`。按 WorkBuddy 插件市场标准安装，无自定义 install.sh。（初版曾把两份清单挤在同一 `.codebuddy-plugin/` 下、`source: "./"`，插件根＝市场根，与官方两层形态不符，已改。）
 - 钩子三事件（与 Dim 版同源，协议按 WorkBuddy 改写）：
   - `SessionStart`（matcher `startup|resume|clear|compact`）：注入记忆层简则；未装引擎则注入安装引导（`npm i -g @rsrsai/cli@latest`，agent 代装）；已装则一次探测三态（未登录/空库/缺模型）按需附引导，常态零打扰。
   - `UserPromptSubmit`：每轮 `rsrs recall --titles` 标题档注入（分数＋8 位短 id＋标题，`superseded_by` 标「已被取代」）；prompt 以「记：/存：/remember:」开头直接落库并回执，判后即存判相似时转述候选待模型决断；`/nomem` 关本轮。
@@ -14,4 +14,4 @@
 - 落库协议：`rsrs remember --importance important`（引擎判后即存：`status:"pending"` + `written:false` 时不写入，转述候选）；回执催 `retitle` 替换暂拟题。
 - 引擎探测链扩展：`~/.npm-global/bin/rsrs`、`/usr/local/bin/rsrs` 入列（本机 npm 前缀安装与系统安装并存）。
 - 模型体积口径：BGE-M3 量化版 onnx 件约 570 MB（tokenizer 约 17 MB），激活时同目录生成 cpu-v1.ort 再占约 543 MiB，目录总占用约 1.1 GB；非 fp16 的 1.1G 单件。
-- 测试：桩引擎全分支 25 断言（不碰真库）＋真机只读分支，`--store` 显式写探针（写→断言→forget 自清理）；`scripts/validate_plugin.py` 结构/清单/hooks 形状/fail-open/敏感扫描自检。
+- 测试：桩引擎全分支 29 断言（不碰真库）＋真机只读分支，`--store` 显式写探针（写→断言→forget 自清理）；`plugins/respire/scripts/validate_plugin.py` 结构/清单/hooks 形状/fail-open/敏感扫描自检（跨市场根与插件根两处路径均校验）。

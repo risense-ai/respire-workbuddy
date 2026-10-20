@@ -9,7 +9,9 @@ import py_compile
 import re
 import sys
 
-ROOT = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
+PLUGIN_ROOT = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
+REPO_ROOT = os.path.abspath(os.path.join(PLUGIN_ROOT, "..", ".."))
+ROOT = PLUGIN_ROOT
 failed = False
 
 
@@ -50,18 +52,26 @@ def parse_json(rel: str):
 
 REQUIRED = [
     ".codebuddy-plugin/plugin.json",
-    ".codebuddy-plugin/marketplace.json",
     "hooks/hooks.json",
     "hooks/respire.py",
     "hooks/respire.config.example.json",
     "skills/respire/SKILL.md",
     "tests/test_hooks.sh",
+]
+REPO_REQUIRED = [
+    ".codebuddy-plugin/marketplace.json",
     "README.md",
     "CHANGELOG.md",
     "LICENSE",
 ]
 for rel in REQUIRED:
     read_text(rel)
+for rel in REPO_REQUIRED:
+    p = os.path.join(REPO_ROOT, rel)
+    if not os.path.isfile(p):
+        fail(f"missing {rel} (repo root)")
+    else:
+        ok(rel)
 
 # ---- 插件清单 ----
 manifest = parse_json(".codebuddy-plugin/plugin.json")
@@ -84,8 +94,20 @@ if manifest:
     else:
         ok("manifest skills pointer")
 
-# ---- 市场清单：本仓自为市场，source 指向仓根 ----
-mp = parse_json(".codebuddy-plugin/marketplace.json")
+# ---- 市场清单：本仓自为市场，source 指向仓内插件子目录 ----
+_mp_text = ""
+_mp_path = os.path.join(REPO_ROOT, ".codebuddy-plugin/marketplace.json")
+if os.path.isfile(_mp_path):
+    with open(_mp_path, encoding="utf-8") as f:
+        _mp_text = f.read()
+    try:
+        mp = json.loads(_mp_text)
+    except Exception as e:
+        fail(f"invalid JSON marketplace.json: {e}")
+        mp = None
+else:
+    fail("missing .codebuddy-plugin/marketplace.json (repo root)")
+    mp = None
 if mp:
     plugs = mp.get("plugins") or []
     respire = next((p for p in plugs if p.get("name") == "respire"), None)
@@ -97,6 +119,13 @@ if mp:
             fail(f"marketplace source must stay inside repo: {src!r}")
         else:
             ok(f"marketplace source {src!r}")
+        resolved = os.path.abspath(os.path.join(REPO_ROOT, src.lstrip("./")))
+        if not os.path.isdir(resolved):
+            fail(f"marketplace source dir does not exist: {resolved}")
+        elif os.path.isfile(os.path.join(resolved, ".codebuddy-plugin", "plugin.json")):
+            ok("marketplace source holds plugin.json")
+        else:
+            fail("marketplace source dir lacks .codebuddy-plugin/plugin.json")
 
 # ---- hooks 规范：事件合法、command 走 ${CODEBUDDY_PLUGIN_ROOT}、含回退链、timeout 正 ----
 hooks_cfg = parse_json("hooks/hooks.json")

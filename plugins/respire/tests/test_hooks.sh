@@ -4,6 +4,7 @@
 # 写库探针须显式 --store（写真库→回执断言→rsrs forget 自清理），缺省绝不写。
 set -u
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+REPO_ROOT="$(cd "$ROOT/../.." && pwd)"
 PY3="$(command -v python3)"
 [ -z "$PY3" ] && PY3="$(command -v python)"
 RSRS="$(command -v rsrs || true)"
@@ -125,8 +126,8 @@ check "日志脱敏口令" "$(grep -q 'hunter2' "$TMP/hook.log" && echo LEAK || 
 check "日志脱敏留痕" "$(grep -q 'REDACTED' "$TMP/hook.log" && echo YES)" "含:YES"
 check "hook.log 留痕" "$(grep -q '"ev": "session"' "$TMP/hook.log" 2>/dev/null && echo YES)" "含:YES"
 echo "== ③ 包内静态物 =="
-check "README 载三件事(模型可选)" "$(cat "$ROOT/README.md")" "含:不装模型完全可用"
-check "README 载标准装法" "$(cat "$ROOT/README.md")" "含:codebuddy plugin install respire@risense"
+check "README 载三件事(模型可选)" "$(cat "$REPO_ROOT/README.md")" "含:不装模型完全可用"
+check "README 载标准装法" "$(cat "$REPO_ROOT/README.md")" "含:codebuddy plugin install respire@risense-workbuddy"
 check "包内无自定义安装脚本" "$(ls "$ROOT"/install.sh "$ROOT"/uninstall.sh 2>&1)" "含:No such file"
 
 if [ "$WITH_STORE" = 1 ]; then

@@ -15,22 +15,24 @@
 
 ```bash
 git clone https://github.com/risense-ai/respire-workbuddy.git && cd respire-workbuddy
-python3 scripts/validate_plugin.py                     # 自检：结构/清单/hooks/敏感扫描
+python3 plugins/respire/scripts/validate_plugin.py     # 自检：结构/清单/hooks/敏感扫描
 codebuddy plugin marketplace add <本仓绝对路径>
-codebuddy plugin install respire@risense
+codebuddy plugin install respire@risense-workbuddy
 ```
 
-或在 WorkBuddy 桌面端：**插件 → + → 添加插件市场** → 填本仓路径 → 安装 `respire`。CLI 若可用也可直接 `codebuddy plugin marketplace add` 后 `codebuddy plugin install respire@risense --overwrite` 升级。
+或在 WorkBuddy 桌面端：**左侧栏「插件」→ 市场标签页右侧「+」→ 添加市场** → 填本仓绝对路径（或 GitHub 源 `risense-ai/respire-workbuddy`）→ 提交 → 切到该市场 → 点 `respire` 的「安装」。CLI 若可用也可直接 `codebuddy plugin marketplace add` 后 `codebuddy plugin install respire@risense-workbuddy --overwrite` 升级。
+
+仓结构＝标准两层：仓根 `.codebuddy-plugin/marketplace.json` 是市场清单，插件本体在 `plugins/respire/`（其内 `.codebuddy-plugin/plugin.json` 为插件清单）。
 
 引擎（rsrs CLI）缺失时插件会在会话内注入装法（`npm i -g @rsrsai/cli@latest`），可让 agent 代装。**新会话起生效。**
 
-安装位置：`~/.workbuddy/plugins/cache/risense/respire/<版本>/`（WorkBuddy 标准缓存，随市场自动更新）。
+安装位置：`~/.workbuddy/plugins/cache/risense-workbuddy/respire/<版本>/`（WorkBuddy 标准缓存，随市场自动更新）。
 
 验证：
 
 ```bash
-ls ~/.workbuddy/plugins/cache/risense/respire/*/    # .codebuddy-plugin、hooks、skills 齐
-echo '{"prompt":"respire 测试"}' | python3 ~/.workbuddy/plugins/cache/risense/respire/*/hooks/respire.py UserPromptSubmit
+ls ~/.workbuddy/plugins/cache/risense-workbuddy/respire/*/    # .codebuddy-plugin、hooks、skills 齐
+echo '{"prompt":"respire 测试"}' | python3 ~/.workbuddy/plugins/cache/risense-workbuddy/respire/*/hooks/respire.py UserPromptSubmit
 ```
 
 ## 定位：安装器 ＋ 管理器 ＋ 正常钩子
@@ -72,7 +74,7 @@ echo '{"prompt":"respire 测试"}' | python3 ~/.workbuddy/plugins/cache/risense/
 
 ## 调优（可选）
 
-`~/.workbuddy/plugins/cache/risense/respire/<版本>/hooks/respire.config.json`（缺失即全默认，改完新会话生效；**不涉及登录与账号**）：
+`~/.workbuddy/plugins/cache/risense-workbuddy/respire/<版本>/hooks/respire.config.json`（缺失即全默认，改完新会话生效；**不涉及登录与账号**）：
 
 | 字段 | 默认 | 含义 |
 | --- | --- | --- |
@@ -93,8 +95,8 @@ echo '{"prompt":"respire 测试"}' | python3 ~/.workbuddy/plugins/cache/risense/
 WorkBuddy 无独立卸载命令时搬移式卸载，**目标必须在 plugins 根之外**（根内带 manifest 的残留目录会被当插件继续加载、钩子双跑）：
 
 ```bash
-mv ~/.workbuddy/plugins/cache/risense/respire ~/.workbuddy/plugins-backup/respire.removed-$(date +%s)
-codebuddy plugin uninstall respire@risense
+mv ~/.workbuddy/plugins/cache/risense-workbuddy/respire ~/.workbuddy/plugins-backup/respire.removed-$(date +%s)
+codebuddy plugin uninstall respire@risense-workbuddy
 ```
 
 ## 设计要点
@@ -104,7 +106,7 @@ codebuddy plugin uninstall respire@risense
 - **标题档注入**：`recall --titles` 只回 id/score/title，正文交 `show` 按需拉取；`superseded_by` 标「已被取代」
 - **判后即存尊重设计**：落库不带 `--force`，`pending` 候选原样转述给模型决断
 - **`${CODEBUDDY_PLUGIN_ROOT}` 占位符**：WorkBuddy 运行时替换为插件安装根，跨机器自洽；command 带 `python3 || python` 回退链
-- **包内自检**：`python3 scripts/validate_plugin.py`（结构/清单/hooks 形状/可编译/fail-open/敏感扫描），分发前必跑
+- **包内自检**：`python3 plugins/respire/scripts/validate_plugin.py`（结构/清单/hooks 形状/可编译/fail-open/敏感扫描），分发前必跑
 
 ## 已知边界
 
@@ -116,9 +118,9 @@ codebuddy plugin uninstall respire@risense
 ## 测试
 
 ```bash
-python3 scripts/validate_plugin.py   # 包结构自检
-bash tests/test_hooks.sh             # 行为断言（桩引擎全分支＋真机只读，不碰真库）
-bash tests/test_hooks.sh --store     # 加写探针（写真库→回执→rsrs forget 自清理）
+python3 plugins/respire/scripts/validate_plugin.py   # 包结构自检
+bash plugins/respire/tests/test_hooks.sh             # 行为断言（桩引擎全分支＋真机只读，不碰真库）
+bash plugins/respire/tests/test_hooks.sh --store     # 加写探针（写真库→回执→rsrs forget 自清理）
 ```
 
 rsrs 无 data-dir 隔离（runtime 单例＋全局 client.json），故写测试仅在显式开启时进行，即写即忘。

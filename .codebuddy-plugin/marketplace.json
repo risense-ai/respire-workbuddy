@@ -1,5 +1,5 @@
 {
-  "name": "risense",
+  "name": "risense-workbuddy",
   "owner": {
     "name": "risense-ai"
   },
@@ -10,8 +10,10 @@
   "plugins": [
     {
       "name": "respire",
-      "source": "./",
-      "description": "respire memory for WorkBuddy: title-tier recall every round, one-prefix store, model-optional degradation."
+      "source": "./plugins/respire",
+      "description": "respire memory for WorkBuddy: title-tier recall every round, one-prefix store, model-optional degradation.",
+      "version": "0.1.0",
+      "category": "Productivity"
     }
   ]
 }
