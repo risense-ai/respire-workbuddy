@@ -7,7 +7,7 @@
 ## 不装模型完全可用（降级是一等公民）
 
 - **注册、登录、同步、召回全不依赖端侧模型**——装完插件即可用，未装模型时引擎自动走词面档（等同 memlite 未配嵌入的效果）。
-- BGE-M3（量化版 onnx 件约 570 MB，另 tokenizer 约 17 MB；激活时引擎同目录生成 cpu-v1.ort 再占约 543 MiB，故目录总占用约 1.1 GB）是**纯可选增强**：想要更好的语义召回再 `rsrs model install && rsrs model activate m3`，插件检测到未装会在会话内提示一句，装与不装都不报错、不拦路。
+- BGE-M3（量化版，下载约 570 MB：onnx 件约 543 MiB ＋ tokenizer 约 17 MB）是**纯可选增强**：想要更好的语义召回再 `rsrs model install && rsrs model activate m3`，插件检测到未装会在会话内提示一句，装与不装都不报错、不拦路。
 
 ## 安装（WorkBuddy 标准插件市场）
 
