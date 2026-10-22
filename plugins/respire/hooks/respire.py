@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 # respire —— respire(rsrs) × WorkBuddy 记忆插件（hook 端单入口）
-# 职责两件：引擎未装时注入安装引导；已装则在既定时机跑 rsrs（简则/召回/存储检查）。
+# 与 respire-qoder 同源方案：SessionStart 注简则、UserPromptSubmit 每轮召回、Stop 存储检查；
+# 0.2.0 起并入 qoder 侧演进：宿主内部提示白名单（skip_prefixes）、store: 落库前缀、data_dir、事件名回退。
 # 用法: python3 respire.py <SessionStart|UserPromptSubmit|Stop>   （事件 JSON 走 stdin）
 # 铁律: fail-open —— 任何异常 → 空 stdout、exit 0（协议里即「无决策、放行」），绝不 exit 2。
 from __future__ import annotations
@@ -13,7 +14,7 @@ import subprocess
 import sys
 import time
 
-VERSION = "0.1.0"
+VERSION = "0.2.0"
 
 # 超时窗（秒）：须盖住 rsrs runtime 冷启动（实测 doctor 模型加载 7s+），否则首轮静默、热后即灵
 RECALL_T = 14
@@ -31,10 +32,11 @@ DEFAULTS = {
     "log": True,                # hook.log 轻量留痕（每事件一行，复盘时灵时不灵的抓手）
     "enabled": True,           # 总开关：false=记忆层全线静默（WorkBuddy 插件页亦可逐组件关 hook）
     "store_nudge_every": 1,     # Stop 存储检查节流：1=每轮、N=每 N 轮一次、0=关闭（每轮=多一轮模型小调用）
+    "skip_prefixes": [],        # 宿主内部提示白名单：命中这些前缀的 prompt 不召回也不落库（如宿主给自动化任务写的 Recap；默认空，按需配置）
 }
 
 # 显式落库前缀：prompt 以「记：」等开头 → 直接入库并回执
-STORE_PREFIX = re.compile(r"^(?:记|存|记录|记住|remember)\s*[:：]\s*", re.I)
+STORE_PREFIX = re.compile(r"^(?:记|存|记录|记住|remember|store)\s*[:：]\s*", re.I)
 # 本轮跳过召回
 SKIP_PREFIX = re.compile(r"^(?:/nomem|#nomem)\b")
 
@@ -78,13 +80,27 @@ def redact(s: str) -> str:
     return s
 
 
+def data_dir() -> str:
+    """运行时数据目录（hook.log / .nudge_counter）：显式环境变量 → 宿主插件数据目录 → 脚本目录回退。
+    WorkBuddy 未文档化插件数据目录机制，故以脚本目录兜底（与 0.1.0 行为一致）。"""
+    for env in ("RESPITE_DATA", "CODEBUDDY_PLUGIN_DATA"):
+        d = os.environ.get(env, "")
+        if d:
+            try:
+                os.makedirs(d, exist_ok=True)
+                return d
+            except Exception:
+                pass
+    return os.path.dirname(os.path.abspath(__file__))
+
+
 def log_event(cfg: dict, event: str, outcome: str, detail: str = "", ms=None):
     """轻量留痕：hook.log 单行 JSONL、超 256KB 整文件清轮；日志失败绝不影响主链。
     config log:false 关闭。字段：ts/ev/out/ms（耗时毫秒）/d（摘要）。"""
     if not cfg.get("log", True):
         return
     try:
-        path = os.environ.get("RESPITE_LOG") or os.path.join(os.path.dirname(os.path.abspath(__file__)), "hook.log")
+        path = os.environ.get("RESPITE_LOG") or os.path.join(data_dir(), "hook.log")
         try:
             if os.path.exists(path) and os.path.getsize(path) > LOG_MAX:
                 os.remove(path)
@@ -343,7 +359,7 @@ def on_stop(data: dict, cfg: dict, engine) -> str:
         return ""
     try:  # 节流计数（失败则不拦）
         state = os.environ.get("RESPITE_NUDGE_STATE") or os.path.join(
-            os.path.dirname(os.path.abspath(__file__)), ".nudge_counter")
+            data_dir(), ".nudge_counter")
         n = 0
         try:
             with open(state, encoding="utf-8") as f:
@@ -359,8 +375,7 @@ def on_stop(data: dict, cfg: dict, engine) -> str:
     except Exception:
         pass
     try:  # 近 10 分钟本层已落库过 → 不再催（记忆活跃）
-        logp = os.environ.get("RESPITE_LOG") or os.path.join(
-            os.path.dirname(os.path.abspath(__file__)), "hook.log")
+        logp = os.environ.get("RESPITE_LOG") or os.path.join(data_dir(), "hook.log")
         now = time.time()
         if os.path.exists(logp):
             with open(logp, encoding="utf-8", errors="replace") as f:
@@ -401,6 +416,10 @@ def on_prompt(data: dict, cfg: dict, engine) -> str:
     if not prompt or SKIP_PREFIX.match(prompt):
         log_event(cfg, "prompt", "nomem_or_empty", prompt[:40])
         return ""
+    for pat in (cfg.get("skip_prefixes") or []):   # 宿主内部提示白名单：不召回不落库
+        if isinstance(pat, str) and pat and prompt[:len(pat)].lower() == pat.lower():
+            log_event(cfg, "prompt", "internal_skip", pat)
+            return ""
     m = STORE_PREFIX.match(prompt)
     if m:
         rest = prompt[m.end():].strip()
@@ -436,6 +455,8 @@ def main() -> None:
             data = {}
         if not isinstance(data, dict):
             data = {}
+        if not event:
+            event = str(data.get("hook_event_name") or "")   # 事件名回退：stdin JSON 自带 hook_event_name
     except Exception:
         data, event = {}, ""
 

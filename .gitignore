@@ -6,5 +6,5 @@ __pycache__/
 .DS_Store
 .omo/
 .codegraph/
-hooks/hook.log
-hooks/.nudge_counter
+hook.log
+.nudge_counter

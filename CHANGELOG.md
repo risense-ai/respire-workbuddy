@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.2.0 — 2026-10-22
+
+对齐 respire-qoder v0.6.2 方案，移植其演进项；WorkBuddy 侧适配（中文提示、Stop 协议、`${CODEBUDDY_PLUGIN_ROOT}`）保持不变。
+
+- `skip_prefixes` 配置（默认 `[]`）：宿主内部提示白名单——prompt 以列表中任一前缀开头（大小写不敏感）则本轮不召回也不落库；qoder 侧用于跳过 Qoder 任务监控的 Recap 提示，WorkBuddy 侧默认空、按需配置。
+- 落库前缀扩为 `记|存|记录|记住|remember|store`（新增英文 `store:`）。
+- 新增 `data_dir()`：运行时数据（hook.log / .nudge_counter）路径统一走 `RESPITE_DATA` → `CODEBUDDY_PLUGIN_DATA` → 脚本目录回退（WorkBuddy 未文档化插件数据目录，实际仍落脚本目录，与 0.1.0 行为一致）。
+- 事件名回退：环境变量之外，stdin JSON 的 `hook_event_name` 亦可定事件。
+- `.gitignore` 修正锚定：`hooks/hook.log` 只匹配仓根，改裸名 `hook.log`/`.nudge_counter` 使插件子目录日志同样被忽略。
+- 测试：新增 `store:` 前缀、白名单跳过（含大小写不敏感）、白名单不影响普通 prompt 五断言；修复「包内无自定义安装脚本」断言依赖英文 ls 报错的 locale 问题（改为直接判文件不存在）。
+
 ## 0.1.0 — 2026-10-20
 
 首版：respire 由 Dim 插件移植为 WorkBuddy 标准插件。

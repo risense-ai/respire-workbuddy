@@ -24,6 +24,8 @@ CFG_STORE="$TMP/config-store.json"
 echo '{"session_rules": false}' > "$CFG_STORE"
 CFG_STOP="$TMP/config-stop.json"
 echo '{"session_rules": false, "store_nudge_every": 1}' > "$CFG_STOP"
+CFG_SKIP="$TMP/config-skip.json"
+echo '{"session_rules": false, "skip_prefixes": ["你正在为宿主任务编写", "Host internal recap"]}' > "$CFG_SKIP"
 
 # ---- 桩引擎：按子命令回 canned JSON，路径写进 config ----
 STUB="$TMP/rsrs-stub"
@@ -117,6 +119,10 @@ check "落库回执催 retitle" "$(run UserPromptSubmit "记：测试条目：�
 check "落库 pending 转述候选" "$(run UserPromptSubmit "记：测试条目：判重候选自测。" "$CFG_ON" pending)" "含:落库待决"
 check "落库 pending 带挂靠法" "$(run UserPromptSubmit "记：测试条目：判重候选自测。" "$CFG_ON" pending)" "含:--force"
 check "无记：前缀不落库" "$(run UserPromptSubmit "普通问题不做落库")" "不含:【respire·落库】"
+check "store: 前缀落库回执" "$(run UserPromptSubmit "store: 测试条目：英文前缀落库自测。")" "含:【respire·落库】"
+check "白名单前缀跳过召回" "$(run UserPromptSubmit "你正在为宿主任务编写简短 Recap" "$CFG_SKIP")" "空"
+check "白名单前缀大小写不敏感" "$(run UserPromptSubmit "HOST INTERNAL RECAP of the session" "$CFG_SKIP")" "空"
+check "白名单不影响普通 prompt" "$(run UserPromptSubmit "普通问题照常召回注入" "$CFG_SKIP")" "含:桩召回命中条一"
 check "Stop 存储检查拒答续跑" "$(run Stop "" "$CFG_STOP" ok "$STUB" "$TMP/stop1.log")" "json:permissionDecision=deny"
 check "Stop 反馈带存库指令" "$(run Stop "" "$CFG_STOP" ok "$STUB" "$TMP/stop2.log")" "含:rsrs remember"
 echo "== ② 日志留痕与脱敏 =="
@@ -128,7 +134,7 @@ check "hook.log 留痕" "$(grep -q '"ev": "session"' "$TMP/hook.log" 2>/dev/null
 echo "== ③ 包内静态物 =="
 check "README 载三件事(模型可选)" "$(cat "$REPO_ROOT/README.md")" "含:不装模型完全可用"
 check "README 载标准装法" "$(cat "$REPO_ROOT/README.md")" "含:codebuddy plugin install respire@risense-workbuddy"
-check "包内无自定义安装脚本" "$(ls "$ROOT"/install.sh "$ROOT"/uninstall.sh 2>&1)" "含:No such file"
+check "包内无自定义安装脚本" "$([ ! -f "$ROOT/install.sh" ] && [ ! -f "$ROOT/uninstall.sh" ] && echo CLEAN)" "含:CLEAN"
 
 if [ "$WITH_STORE" = 1 ]; then
   echo "== ④ 写探针（写真库→断言→forget 自清理） =="

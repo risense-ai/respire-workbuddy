@@ -87,6 +87,7 @@ echo '{"prompt":"respire 测试"}' | python3 ~/.workbuddy/plugins/cache/risense-
 | `enabled` | `true` | **总开关**：false=全线静默 |
 | `store_nudge_every` | `1` | Stop 存储检查节流：1=每轮、N=每 N 轮、0=关（每轮=多一轮模型小调用） |
 | `log` | `true` | `hooks/hook.log` 留痕（超 256KB 清轮，口令/token/长数字自动打码） |
+| `skip_prefixes` | `[]` | 宿主内部提示白名单：prompt 以列表中任一前缀开头（大小写不敏感）则本轮不召回也不落库——宿主给自动化任务写 Recap 之类时按需加 |
 
 过滤策略：**默认不设阈值**——三层已框住噪音：rsrs skip 门、limit 5、标题档。历史教训：阈值 0.56→0.31 每降一次都是真相关被拦的补救，漏召代价远大于多看两行标题。
 
