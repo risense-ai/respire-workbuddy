@@ -11,13 +11,22 @@
 
 ## 安装（一条脚本，走官方装载链路）
 
-克隆本仓后跑安装脚本——自动定位 WorkBuddy 桌面端自带的 `codebuddy` CLI（非常规安装位可设 `CODEBUDDY_BIN=/path/to/codebuddy`），注册本地市场、安装插件并验证注册表与缓存落地：
+一行装（无需克隆，GitHub 远端市场直达）：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/risense-ai/respire-workbuddy/main/install.sh | bash
+```
+
+或克隆后跑安装脚本——自动定位 WorkBuddy 桌面端自带的 `codebuddy` CLI（非常规安装位可设 `CODEBUDDY_BIN=/path/to/codebuddy`），注册市场、安装插件并验证注册表与缓存落地：
 
 ```bash
 git clone https://github.com/risense-ai/respire-workbuddy.git && cd respire-workbuddy
-bash install.sh                # 安装；已装则升级到仓内版本
+bash install.sh                # 安装；已装则升级到最新
+bash install.sh --github       # 强制走 GitHub 远端市场（忽略本地仓）
 bash install.sh --uninstall    # 卸载（保留市场注册，便于重装）
 ```
+
+升级：重跑任一安装命令即可——git 型市场先 `marketplace update` 拉 origin 再 `plugin update`。
 
 **装完须完全退出并重启 WorkBuddy，新会话起生效。** WorkBuddy 正在运行时写入可能被其内存态覆盖——若重启后没生效，退出 WorkBuddy 再跑一次脚本即可。
 

@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.3.1 — 2026-10-22
+
+GitHub 远端市场为缺省分发源：外部用户无需克隆即可安装。
+
+- `install.sh` 源选择三级：`--github` 强制远端 → 本地有 `.codebuddy-plugin/marketplace.json` 用本地（开发/测试）→ 否则回落 `risense-ai/respire-workbuddy`（owner/repo，git 型市场）；升级路径改先 `marketplace update` 拉 origin 再 `plugin update`
+- README 安装段置顶一行装：`curl -fsSL https://raw.githubusercontent.com/risense-ai/respire-workbuddy/main/install.sh | bash`（仓已核实 PUBLIC）
+- 测试补「远端市场源存在」断言
+
 ## 0.3.0 — 2026-10-22
 
 安装脚本落地：WorkBuddy 桌面端 GUI 未证实有插件安装入口，补一条脚本化官方装载链路。

@@ -137,6 +137,7 @@ check "README 载标准装法" "$(cat "$REPO_ROOT/README.md")" "含:codebuddy pl
 check "仓根含安装脚本" "$([ -f "$REPO_ROOT/install.sh" ] && echo YES)" "含:YES"
 check "安装脚本支持卸载" "$(grep -q -- '--uninstall' "$REPO_ROOT/install.sh" 2>/dev/null && echo YES)" "含:YES"
 check "安装脚本走官方 CLI" "$(grep -q 'plugin install' "$REPO_ROOT/install.sh" 2>/dev/null && echo YES)" "含:YES"
+check "安装脚本含远端市场源" "$(grep -q 'risense-ai/respire-workbuddy' "$REPO_ROOT/install.sh" 2>/dev/null && echo YES)" "含:YES"
 
 if [ "$WITH_STORE" = 1 ]; then
   echo "== ④ 写探针（写真库→断言→forget 自清理） =="

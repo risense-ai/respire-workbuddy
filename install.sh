@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # respire × WorkBuddy 插件安装/卸载脚本
 # 用法: bash install.sh              安装（幂等：已装则提示升级）
+#       bash install.sh --github    强制从 GitHub 远端市场装（不依赖本地仓）
 #       bash install.sh --uninstall  卸载插件（保留市场注册，便于重装）
 # 原理: 调 WorkBuddy 桌面端自带的 codebuddy CLI 走官方装载链路
 #       （marketplace add → plugin install），不手改 ~/.workbuddy 注册表。
@@ -10,6 +11,7 @@ set -u
 MARKET_NAME="risense-workbuddy"
 PLUGIN_ID="respire@risense-workbuddy"
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+GITHUB_SRC="risense-ai/respire-workbuddy"   # 远端市场源（owner/repo）：--github 或本地无清单时用；git 型市场可 marketplace update 随 origin 升级
 NOW="$(date -Iseconds 2>/dev/null || date)"
 
 die() { echo "✗ $*" >&2; exit 1; }
@@ -60,8 +62,18 @@ if [ "${1:-}" = "--uninstall" ]; then
 fi
 
 # ---- 4. 安装：市场注册（已注册则刷新）→ 装插件（已装则升级） ----
-if "$CB" plugin marketplace add "$REPO_ROOT" --name "$MARKET_NAME" >/dev/null 2>&1; then
-  say "市场 $MARKET_NAME 已注册（源：$REPO_ROOT）"
+# 源选择：--github 强制远端；本地有清单用本地（开发/测试）；否则回落远端 GitHub 市场
+if [ "${1:-}" = "--github" ]; then
+  SRC="$GITHUB_SRC"
+elif [ -f "$REPO_ROOT/.codebuddy-plugin/marketplace.json" ]; then
+  SRC="$REPO_ROOT"
+else
+  SRC="$GITHUB_SRC"
+fi
+say "市场源：$SRC"
+
+if "$CB" plugin marketplace add "$SRC" --name "$MARKET_NAME" >/dev/null 2>&1; then
+  say "市场 $MARKET_NAME 已注册"
 else
   say "市场已存在，刷新之"
   "$CB" plugin marketplace update "$MARKET_NAME" >/dev/null 2>&1 \
@@ -69,7 +81,8 @@ else
 fi
 
 if is_installed; then
-  say "已安装，升级到仓内版本"
+  say "已安装，升级到最新"
+  "$CB" plugin marketplace update "$MARKET_NAME" >/dev/null 2>&1   # git 型市场先拉 origin 再升级
   "$CB" plugin update "$PLUGIN_ID" || die "升级失败。可先 bash install.sh --uninstall 再重装。"
 else
   "$CB" plugin install "$PLUGIN_ID" || die "安装失败（CLI 报错见上）。"
