@@ -63,6 +63,7 @@ REPO_REQUIRED = [
     "README.md",
     "CHANGELOG.md",
     "LICENSE",
+    "install.sh",
 ]
 for rel in REQUIRED:
     read_text(rel)

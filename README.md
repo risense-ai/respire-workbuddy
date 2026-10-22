@@ -9,18 +9,26 @@
 - **注册、登录、同步、召回全不依赖端侧模型**——装完插件即可用，未装模型时引擎自动走词面档（等同 memlite 未配嵌入的效果）。
 - BGE-M3（量化版，下载约 570 MB：onnx 件约 543 MiB ＋ tokenizer 约 17 MB）是**纯可选增强**：想要更好的语义召回再 `rsrs model install && rsrs model activate m3`，插件检测到未装会在会话内提示一句，装与不装都不报错、不拦路。
 
-## 安装（WorkBuddy 标准插件市场）
+## 安装（一条脚本，走官方装载链路）
 
-克隆本仓，在 WorkBuddy 插件页添加本地市场后安装：
+克隆本仓后跑安装脚本——自动定位 WorkBuddy 桌面端自带的 `codebuddy` CLI（非常规安装位可设 `CODEBUDDY_BIN=/path/to/codebuddy`），注册本地市场、安装插件并验证注册表与缓存落地：
 
 ```bash
 git clone https://github.com/risense-ai/respire-workbuddy.git && cd respire-workbuddy
-python3 plugins/respire/scripts/validate_plugin.py     # 自检：结构/清单/hooks/敏感扫描
-codebuddy plugin marketplace add <本仓绝对路径>
+bash install.sh                # 安装；已装则升级到仓内版本
+bash install.sh --uninstall    # 卸载（保留市场注册，便于重装）
+```
+
+**装完须完全退出并重启 WorkBuddy，新会话起生效。** WorkBuddy 正在运行时写入可能被其内存态覆盖——若重启后没生效，退出 WorkBuddy 再跑一次脚本即可。
+
+手动兜底（脚本失效时）：
+
+```bash
+codebuddy plugin marketplace add <本仓绝对路径> --name risense-workbuddy
 codebuddy plugin install respire@risense-workbuddy
 ```
 
-或在 WorkBuddy 桌面端：**左侧栏「插件」→ 市场标签页右侧「+」→ 添加市场** → 填本仓绝对路径（或 GitHub 源 `risense-ai/respire-workbuddy`）→ 提交 → 切到该市场 → 点 `respire` 的「安装」。CLI 若可用也可直接 `codebuddy plugin marketplace add` 后 `codebuddy plugin install respire@risense-workbuddy --overwrite` 升级。
+GUI 未证实存在插件安装入口；若你的版本有（插件页 → 市场 → 添加本地市场），走 GUI 亦可。
 
 仓结构＝标准两层：仓根 `.codebuddy-plugin/marketplace.json` 是市场清单，插件本体在 `plugins/respire/`（其内 `.codebuddy-plugin/plugin.json` 为插件清单）。
 
@@ -93,7 +101,7 @@ echo '{"prompt":"respire 测试"}' | python3 ~/.workbuddy/plugins/cache/risense-
 
 ## 卸载
 
-WorkBuddy 无独立卸载命令时搬移式卸载，**目标必须在 plugins 根之外**（根内带 manifest 的残留目录会被当插件继续加载、钩子双跑）：
+首选 `bash install.sh --uninstall`（走官方 CLI，注册表干净）。CLI 失效时搬移式兜底，**目标必须在 plugins 根之外**（根内带 manifest 的残留目录会被当插件继续加载、钩子双跑）：
 
 ```bash
 mv ~/.workbuddy/plugins/cache/risense-workbuddy/respire ~/.workbuddy/plugins-backup/respire.removed-$(date +%s)

@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.3.0 — 2026-10-22
+
+安装脚本落地：WorkBuddy 桌面端 GUI 未证实有插件安装入口，补一条脚本化官方装载链路。
+
+- 新增仓根 `install.sh`：自动定位 `codebuddy` CLI（`CODEBUDDY_BIN` 环境变量 → PATH → Linux 桌面端捆绑位 `/var/opt/apps/workbuddy/resources/app.asar.unpacked/cli/bin/codebuddy`），`plugin marketplace add --name risense-workbuddy` 注册本地市场（已注册则 `marketplace update` 刷新）、`plugin install`/`plugin update` 安装或升级、读 `installed_plugins.json` 与缓存目录双重验证；WorkBuddy 运行中给出覆盖风险提示；`--uninstall` 卸载并保留市场注册。不手改注册表，全走官方 CLI。
+- 校验与测试同步翻转：`validate_plugin.py` 的 REPO_REQUIRED 收录 `install.sh`；`test_hooks.sh` 由「包内无自定义安装脚本」改为「仓根含安装脚本＋支持卸载＋走官方 CLI」三断言。
+- README：安装段改脚本优先（GUI 入口标注未证实），卸载段首选脚本、搬移法降为兜底。
+
 ## 0.2.0 — 2026-10-22
 
 对齐 respire-qoder v0.6.2 方案，移植其演进项；WorkBuddy 侧适配（中文提示、Stop 协议、`${CODEBUDDY_PLUGIN_ROOT}`）保持不变。

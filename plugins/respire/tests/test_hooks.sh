@@ -134,7 +134,9 @@ check "hook.log 留痕" "$(grep -q '"ev": "session"' "$TMP/hook.log" 2>/dev/null
 echo "== ③ 包内静态物 =="
 check "README 载三件事(模型可选)" "$(cat "$REPO_ROOT/README.md")" "含:不装模型完全可用"
 check "README 载标准装法" "$(cat "$REPO_ROOT/README.md")" "含:codebuddy plugin install respire@risense-workbuddy"
-check "包内无自定义安装脚本" "$([ ! -f "$ROOT/install.sh" ] && [ ! -f "$ROOT/uninstall.sh" ] && echo CLEAN)" "含:CLEAN"
+check "仓根含安装脚本" "$([ -f "$REPO_ROOT/install.sh" ] && echo YES)" "含:YES"
+check "安装脚本支持卸载" "$(grep -q -- '--uninstall' "$REPO_ROOT/install.sh" 2>/dev/null && echo YES)" "含:YES"
+check "安装脚本走官方 CLI" "$(grep -q 'plugin install' "$REPO_ROOT/install.sh" 2>/dev/null && echo YES)" "含:YES"
 
 if [ "$WITH_STORE" = 1 ]; then
   echo "== ④ 写探针（写真库→断言→forget 自清理） =="
