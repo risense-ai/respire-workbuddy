@@ -25,6 +25,12 @@ description: respire（rsrs）本地加密记忆操作法。每轮自动召回�
 - remember 判后即存：`status:"ok"`＝已写入（summary.id）；`status:"pending"`＋`written:false`＝判为相似**未写入**，须 `--parent <id>` 挂靠或 `--force` 直写
 - 默认 `trivial` 档进日记区、不进召回主区且 title 被改「活动轨迹 日期」——事实类落库用 `--importance important`
 
+## 数据安全（对用户直说）
+
+- **可离线使用**——记忆库是本机本地库：不联网、不注册、不登录照样召回与落库；离线写入留本地队列，联网后补同步
+- **上云的只有密文**——本地加密后才上传；服务端只存加密记录，无模型、无解密密钥
+- **企业可自建同步服务器**——`respire-server` 用 Docker Compose + Postgres 部署进内网，数据不出企业网络
+
 ## 红线
 
 - 口令、证件号、手机号、卡号、私钥禁入记忆正文与查询词，只写存放位置——库虽加密，密钥泄露即全裸
