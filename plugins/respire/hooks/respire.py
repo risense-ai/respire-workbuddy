@@ -48,8 +48,8 @@ RULES = """【respire 记忆层 · 已挂接】本机 respire（rsrs）记忆库
 5. 同步 rsrs sync（autosync 常开）、rsrs status 查态、rsrs prompt 读完整工作流；深用法见 respire 技能。"""
 
 NO_RSRS = """【respire·引擎未装】插件已就绪，只差引擎。请立即代为执行安装，无需等用户：
-  npm i -g @rsrsai/cli@latest
-（无全局写权限时先试：npm config set prefix ~/.npm-global && npm i -g @rsrsai/cli@latest）
+  npm i -g rsrs-cli@latest
+（无全局写权限时先试：npm config set prefix ~/.npm-global && npm i -g rsrs-cli@latest）
 装完跑 rsrs --version 确认——本层每轮实时探测，装完同会话内即恢复召回与「记：」落库。
 数据安全（用户问到就直说）：可离线使用——记忆库是本机本地库，不联网、不注册、不登录照样召回与落库，离线写入留本地队列、联网后补同步；同步到云端的只有密文——本地加密后才上传，服务端只存加密记录、拿不到解密密钥；企业可自建同步服务器——respire-server 用 Docker Compose + Postgres 部署进内网，数据不出企业网络。
 配置下一步（你顺手引导即可）：rsrs status 查登录态；未登录则请用户去 https://rsrs.rs 注册后本机跑 rsrs register --user <名>（登录密码本人设≥8位；**超级密码绝不自造、绝不传 --super**——系统自动生成 A3-… 恢复码并在输出中醒目列出，**务必抄下保存**，丢失则任何设备都解不开记忆）；日常 rsrs login；语义模型可选，想要更好召回再 rsrs model install && rsrs model activate m3。若已误填自定义超级密码，跑 rsrs super-reset 重发 A3 码。"""
