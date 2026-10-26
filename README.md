@@ -81,7 +81,7 @@ echo '{"prompt":"respire 测试"}' | python3 ~/.workbuddy/plugins/cache/risense-
 | `SessionStart` | 注入记忆层简则（何时翻忆、如何落库、红线），对整会话生效；**一次探测三态**——未登录附注册引导（rsrs.rs 注册、`rsrs register` 首设备、`rsrs login --oauth --no-open` 代开授权链接）、库空（<10 条）附首日存料与导入引导、缺语义模型附**可选**装法；常态零打扰 |
 | `UserPromptSubmit` | 自动 `rsrs recall --titles`：**标题档注入**——只给分数＋8 位短 id＋标题，正文由 agent `rsrs show <id>` 按需取（附因果链）；默认**直出不过滤**，噪音边界＝rsrs skip 门＋limit 5＋标题档 |
 | `prompt` 以「记：」「存：」「remember:」开头 | 直接 `rsrs remember … --importance important` 落库并回执；判后即存判为相似时**不写入**、回执转述候选（`--parent` 挂靠或 `--force` 直写），由模型决断；回执硬约束 AI 抽「主语＋动作＋结果」事实句 `retitle` 替换暂拟题 |
-| `Stop`（AI 干完活） | **存储检查**：续跑一轮，提示模型把本轮新的**事实/决定/约定/教训/踩坑**分条 `rsrs remember`（事实句标题、判重先决断）；闲聊无新事实则直接结束。防循环：续跑轮 stdin 带 `stop_hook_active=true` 即放行；节流 `store_nudge_every`（默认 1=每轮，N=每 N 轮，0=关）；近 10 分钟本层已落库过则不再催 |
+| `Stop`（AI 干完活） | **0.3.3 起默认不注册**（此前默认开：干完活续跑一轮催存，噪音大）。需要者自行在 `hooks/hooks.json` 加回 Stop 事件并把 `store_nudge_every` 设为 1/N；代码分支仍在（防循环：`stop_hook_active=true` 放行；近 10 分钟已落库不催） |
 | `prompt` 以 `/nomem` 开头 | 本轮跳过召回 |
 | `skills/respire` | 按需加载的操作法（recall/remember/show/forget/sync 与信封解析要点）；**注意技能只是说明书，动作全由钩子驱动** |
 
@@ -108,7 +108,7 @@ echo '{"prompt":"respire 测试"}' | python3 ~/.workbuddy/plugins/cache/risense-
 | `session_rules` | `true` | 是否注入 SessionStart 简则 |
 | `budget_chars` | `1500` | 单轮注入总预算（标题行远短于此） |
 | `enabled` | `true` | **总开关**：false=全线静默 |
-| `store_nudge_every` | `1` | Stop 存储检查节流：1=每轮、N=每 N 轮、0=关（每轮=多一轮模型小调用） |
+| `store_nudge_every` | `0` | Stop 存储检查节流：**0=默认关**（hooks.json 不注册 Stop）；手动加回 Stop 后 1=每轮、N=每 N 轮 |
 | `log` | `true` | `hooks/hook.log` 留痕（超 256KB 清轮，口令/token/长数字自动打码） |
 | `skip_prefixes` | `[]` | 宿主内部提示白名单：prompt 以列表中任一前缀开头（大小写不敏感）则本轮不召回也不落库——宿主给自动化任务写 Recap 之类时按需加 |
 

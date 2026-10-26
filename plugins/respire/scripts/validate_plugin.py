@@ -133,11 +133,12 @@ hooks_cfg = parse_json("hooks/hooks.json")
 if hooks_cfg:
     events = hooks_cfg.get("hooks") or {}
     allowed = {"SessionStart", "UserPromptSubmit", "Stop"}
+    required = {"SessionStart", "UserPromptSubmit"}   # Stop 存储检查默认不注册（opt-in）
     if set(events) - allowed:
         fail(f"unexpected events: {sorted(set(events) - allowed)}")
     else:
         ok("hook events subset")
-    for ev in allowed:
+    for ev in required:
         if ev not in events:
             fail(f"missing required event {ev}")
     for ev, groups in events.items():

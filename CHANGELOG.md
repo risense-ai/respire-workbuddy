@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.3.3 — 2026-10-26
+
+摘掉 Stop 存储检查：每轮干完活被催一次「记忆检查」，噪音大于收益，哥哥明确不要。
+
+- `hooks/hooks.json` 移除 `Stop` 事件注册（只留 SessionStart 简则 + UserPromptSubmit 每轮召回）；`respire.py` 的 `on_stop` 分支保留，供需要者手动加回
+- `store_nudge_every` 默认 `1` → `0`；`on_stop` 取值缺省同步改 0——即使手滑加回 Stop 也不会默认开催
+- `validate_plugin.py`：`Stop` 由必需事件降为可选（allowed 保留、required 只留 SessionStart / UserPromptSubmit）
+- 测试补断言「hooks.json 默认不注册 Stop」；修 `respire.py` VERSION 落后（0.2.0 → 0.3.3）
+- README「装上后发生什么」与调优表同步改口径
+
 ## 0.3.2 — 2026-10-23
 
 数据存储安全三点说明：安装时说，不每轮说。
