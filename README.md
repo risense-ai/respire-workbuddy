@@ -2,7 +2,7 @@
 
 > 吸即存，呼即取——给 WorkBuddy agent 装上本地加密记忆。
 
-`respire` 是 WorkBuddy 标准内容插件：以命令钩子把 [respire（CLI 名 rsrs）](https://www.npmjs.com/package/@rsrsai/cli) 记忆引擎挂进 agent 循环——每轮标题档自动召回、「记：」一前缀即落库。本地优先、端侧加密、云端 LWW 同步；**不带自定义安装脚本，按 WorkBuddy 插件市场标准安装**。
+`respire` 是 WorkBuddy 标准内容插件：以命令钩子把 [respire（CLI 名 rsrs）](https://www.npmjs.com/package/rsrs-cli) 记忆引擎挂进 agent 循环——每轮标题档自动召回、「记：」一前缀即落库。本地优先、端侧加密、云端 LWW 同步；**不带自定义安装脚本，按 WorkBuddy 插件市场标准安装**。
 
 ## 数据存储安全
 
@@ -47,7 +47,7 @@ GUI 未证实存在插件安装入口；若你的版本有（插件页 → 市�
 
 仓结构＝标准两层：仓根 `.codebuddy-plugin/marketplace.json` 是市场清单，插件本体在 `plugins/respire/`（其内 `.codebuddy-plugin/plugin.json` 为插件清单）。
 
-引擎（rsrs CLI）缺失时插件会在会话内注入装法（`npm i -g @rsrsai/cli@latest`），可让 agent 代装。**新会话起生效。**
+引擎（rsrs CLI）缺失时插件会在会话内注入装法（`npm i -g rsrs-cli@latest`），可让 agent 代装。**新会话起生效。**
 
 安装位置：`~/.workbuddy/plugins/cache/risense-workbuddy/respire/<版本>/`（WorkBuddy 标准缓存，随市场自动更新）。
 
@@ -62,7 +62,7 @@ echo '{"prompt":"respire 测试"}' | python3 ~/.workbuddy/plugins/cache/risense-
 
 插件只做三件，装完自走一条生命周期：
 
-1. **引擎未装时＝安装器**：SessionStart 把安装命令直接注给 agent 代跑（`npm i -g @rsrsai/cli@latest`＋权限兜底＋`rsrs --version` 验证），并顺手交代配置下一步（rsrs.rs 注册／`rsrs register`／模型可选）——无需用户手动操作；
+1. **引擎未装时＝安装器**：SessionStart 把安装命令直接注给 agent 代跑（`npm i -g rsrs-cli@latest`＋权限兜底＋`rsrs --version` 验证），并顺手交代配置下一步（rsrs.rs 注册／`rsrs register`／模型可选）——无需用户手动操作；
 2. **检测就绪＝自动切正常钩子**：每轮实时探测，引擎装完**同会话内**即恢复简则、召回与「记：」落库；
 3. **管理器三档开关**（见下「启用与关闭」）。
 
