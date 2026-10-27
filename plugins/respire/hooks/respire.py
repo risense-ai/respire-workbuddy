@@ -14,7 +14,7 @@ import subprocess
 import sys
 import time
 
-VERSION = "0.2.0"
+VERSION = "0.3.3"
 
 # 超时窗（秒）：须盖住 rsrs runtime 冷启动（实测 doctor 模型加载 7s+），否则首轮静默、热后即灵
 RECALL_T = 14
@@ -31,7 +31,7 @@ DEFAULTS = {
     "budget_chars": 1500,       # 单轮注入总字数预算
     "log": True,                # hook.log 轻量留痕（每事件一行，复盘时灵时不灵的抓手）
     "enabled": True,           # 总开关：false=记忆层全线静默（WorkBuddy 插件页亦可逐组件关 hook）
-    "store_nudge_every": 1,     # Stop 存储检查节流：1=每轮、N=每 N 轮一次、0=关闭（每轮=多一轮模型小调用）
+    "store_nudge_every": 0,     # Stop 存储检查节流：0=默认关（0.3.3 起 hooks.json 不再注册 Stop，此项仅在手动加回 Stop 时生效）；1=每轮、N=每 N 轮
     "skip_prefixes": [],        # 宿主内部提示白名单：命中这些前缀的 prompt 不召回也不落库（如宿主给自动化任务写的 Recap；默认空，按需配置）
 }
 
@@ -355,7 +355,7 @@ def on_stop(data: dict, cfg: dict, engine) -> str:
         return ""
     if not engine:
         return ""
-    every = int(cfg.get("store_nudge_every", 1))
+    every = int(cfg.get("store_nudge_every", 0))
     if every <= 0:
         return ""
     try:  # 节流计数（失败则不拦）
