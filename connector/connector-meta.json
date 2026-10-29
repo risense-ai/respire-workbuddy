@@ -1,0 +1,22 @@
+{
+  "name": "睿思记忆",
+  "name_zh": "睿思记忆",
+  "name_en": "Respire Memory",
+  "description": "本地加密的跨设备 AI 记忆：语义召回、判重落库、因果树整理，可离线使用。",
+  "description_zh": "本地加密的跨设备 AI 记忆：语义召回、判重落库、因果树整理，可离线使用。",
+  "description_en": "Locally encrypted, cross-device AI memory: semantic recall, dedup-then-store, causal-tree cleanup; usable offline.",
+  "source": "respire",
+  "type": "cli",
+  "version": "1.0.0",
+  "examples_zh": [
+    "帮我查一下上次部署失败是怎么解决的",
+    "把这条决定记下来：周三前完成插件上架",
+    "整理最近一周的记忆，把讲同一件事的合并"
+  ],
+  "examples_en": [
+    "Recall how we fixed the last deployment failure",
+    "Remember this decision: finish the plugin listing by Wednesday",
+    "Tidy up last week's memories and merge duplicates"
+  ],
+  "minWorkbuddyVersion": "4.22.0"
+}

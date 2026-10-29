@@ -1,0 +1,37 @@
+{
+  "runtime": {
+    "type": "node",
+    "version": ">=18"
+  },
+  "init": {
+    "darwin": "npm install -g @rsrsai/cli@latest",
+    "linux": "npm install -g @rsrsai/cli@latest",
+    "win32": "npm install -g @rsrsai/cli@latest"
+  },
+  "versionCheck": {
+    "command": {
+      "darwin": "rsrs --version",
+      "linux": "rsrs --version",
+      "win32": "rsrs.cmd --version"
+    },
+    "minVersion": "1.0.0",
+    "versionPattern": "rsrs\\s+v?(\\d+\\.\\d+\\.\\d+)"
+  },
+  "auth": {
+    "darwin": "rsrs login --oauth --no-open",
+    "linux": "rsrs login --oauth --no-open",
+    "win32": "rsrs.cmd login --oauth --no-open"
+  },
+  "unAuth": {
+    "darwin": "rsrs logout",
+    "linux": "rsrs logout",
+    "win32": "rsrs.cmd logout"
+  },
+  "status": {
+    "darwin": "rsrs status",
+    "linux": "rsrs status",
+    "win32": "rsrs.cmd status"
+  },
+  "statusMatch": "User\\s+PASS",
+  "authUrlDomain": "rsrs.rs"
+}

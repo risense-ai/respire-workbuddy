@@ -58,6 +58,20 @@ ls ~/.workbuddy/plugins/cache/risense-workbuddy/respire/*/    # .codebuddy-plugi
 echo '{"prompt":"respire 测试"}' | python3 ~/.workbuddy/plugins/cache/risense-workbuddy/respire/*/hooks/respire.py UserPromptSubmit
 ```
 
+## 连接器形态（hooks 之外的第二种装法）
+
+实测桌面端**不加载插件自带的 hooks**，只有 `settings.json` 用户级钩子会跑；想要「连接器页可见、按需调用」这条路，用仓库里的 `connector/`：
+
+```bash
+python3 connector/install_local.py              # 装 / 升级（幂等）
+python3 connector/install_local.py --uninstall  # 卸（保留市场注册）
+```
+
+1. `connector/` 是官方开放平台（open.workbuddy.cn）的提交源：`connector-meta.json` ＋ `cli.json` ＋ `icon.svg` ＋ `skills/respire-memory/`
+2. `install_local.py` 把包按桌面端认的布局装到 `~/.workbuddy`（六处落盘，全程备份），装完**完全退出并重开**才生效
+3. 两种形态可共存：插件名分别是 `respire`（钩子自动召回）与 `respire-connector`（技能 `respire-memory` 按需调用 `rsrs`）
+4. 细节与上架步骤见 [`connector/README.md`](connector/README.md)
+
 ## 定位：安装器 ＋ 管理器 ＋ 正常钩子
 
 插件只做三件，装完自走一条生命周期：

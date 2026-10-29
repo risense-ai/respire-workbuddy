@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.4.0 — 2026-10-29
+
+新增**连接器形态**：插件 hooks 在桌面端实测不被加载，故把 rsrs 另做一份官方连接器（CLI+Skill），连接器页可见、技能 `respire-memory` 按需调用。
+
+- 新增 `connector/`：`connector-meta.json`（市场条目）、`cli.json`（init / versionCheck / auth / unAuth / status + `statusMatch "User\s+PASS"`）、`icon.svg`、`skills/respire-memory/SKILL.md`
+- 新增 `connector/install_local.py`：本机安装/卸载，把包按桌面端认的布局落盘六处——市场注册、插件缓存、安装条目、`enabledPlugins`、连接器市场包目录＋索引＋图标、`connector-states.json` v4 启用态（`bound/enabled` 双真）；改动前一律备份
+- 命名避让：本地插件名 `respire-connector`（不能与记忆插件 `respire` 同名），技能名 `respire-memory`
+- `cli.json` 相较初版补 `versionCheck`、win32 命令改 `rsrs.cmd`
+- README 增「连接器形态」一节
+
 ## 0.3.3 — 2026-10-26
 
 摘掉 Stop 存储检查：每轮干完活被催一次「记忆检查」，噪音大于收益，哥哥明确不要。
