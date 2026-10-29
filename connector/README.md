@@ -33,6 +33,40 @@ python3 connector/install_local.py --uninstall  # 卸（保留市场注册，便
 
 为什么要脚本而不是命令：`codebuddy plugin` CLI 在桌面端运行期间会卡死（子进程 `epoll` 等主进程 IPC，`exit=124`），插件自带 hooks 也不被加载——只能直接写上述注册表。改动前一律备份到 `~/.workbuddy/.bak-install/connector-<时间戳>/`。
 
+## 测试（提交前必跑）
+
+```bash
+python3 connector/validate_connector.py            # 全检（会真跑 status 探活）
+python3 connector/validate_connector.py --offline  # 只查静态，不碰外部命令
+```
+
+四层，对应审核最容易打回的地方：
+
+| 层 | 查什么 | 不过的后果 |
+| --- | --- | --- |
+| 包结构 | meta/cli/icon/skills 齐；`SKILL.md` 的 `name` 与目录名一致；description 够长 | 模型选不中技能，目录扫不出来 |
+| 市场条目 | 中英名/描述/各 2–5 条示例/`type` | 审核退回补材料 |
+| 命令契约 | `init`/`auth`/`unAuth`/`status` 三平台齐；`statusMatch` 是合法正则且**能命中真实输出**；`versionCheck` 版本达标 | 用户装上了却显示「未连接」或直接被判 needsUpgrade 跳过 |
+| 打包 | zip 顶层是 `connector-meta.json`，不能多套一层目录 | 上传解析失败 |
+
+**为什么单独测 `statusMatch`**：这是 CLI 连接器唯一的「连接判定」依据——平台只跑 `status` 命令再拿正则撞输出，撞不上就永远显示未连接，而命令本身是成功的，最难排查。
+
+## 三层验收（从弱到强）
+
+1. **契约层**：`validate_connector.py` 全绿（26 项）
+2. **平台层**：重启后在应用日志里应看到
+   ```
+   [ConnectorService] CLI auto-connect: <id> authenticated, updating to connected
+   [ConnectorService] CLI Connected: <id>
+   ```
+   （没这两行，说明平台压根没把它当 cli 连接器处理）
+3. **功能层**：按 SKILL.md 的命令手跑一次，确认 `--json` 信封正常
+   ```bash
+   rsrs --client-only recall "关键词" --titles --limit 3 --json
+   ```
+
+
+
 ## 提交官方开放平台
 
 ```bash
