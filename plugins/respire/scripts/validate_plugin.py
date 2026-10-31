@@ -3,6 +3,7 @@
 
 用法: python3 scripts/validate_plugin.py   （退出码 0=通过；任一 FAIL=1）
 """
+import io
 import json
 import os
 import py_compile
@@ -127,6 +128,27 @@ if mp:
             ok("marketplace source holds plugin.json")
         else:
             fail("marketplace source dir lacks .codebuddy-plugin/plugin.json")
+        mp_ver = respire.get("version")
+        plug_json = os.path.join(resolved, ".codebuddy-plugin", "plugin.json")
+        hook_src = os.path.join(resolved, "hooks", "respire.py")
+        try:
+            with open(plug_json, encoding="utf-8") as f:
+                plug_ver = (json.load(f) or {}).get("version")
+        except Exception as e:
+            plug_ver = None
+            fail(f"invalid plugin.json for version sync: {e}")
+        hook_ver = None
+        if os.path.isfile(hook_src):
+            m = re.search(r'^VERSION\s*=\s*"([^"]+)"', io.open(hook_src, encoding="utf-8").read(), re.M)
+            hook_ver = m.group(1) if m else None
+        if mp_ver and plug_ver and mp_ver == plug_ver:
+            ok(f"marketplace entry version matches manifest ({mp_ver})")
+        else:
+            fail(f"marketplace entry version {mp_ver!r} != manifest {plug_ver!r}")
+        if plug_ver and hook_ver and plug_ver == hook_ver:
+            ok(f"hook VERSION matches manifest ({plug_ver})")
+        else:
+            fail(f"hook VERSION {hook_ver!r} != manifest {plug_ver!r}")
 
 # ---- hooks 规范：事件合法、command 走 ${CODEBUDDY_PLUGIN_ROOT}、含回退链、timeout 正 ----
 hooks_cfg = parse_json("hooks/hooks.json")
@@ -154,6 +176,8 @@ if hooks_cfg:
                     fail(f"{ev}: command must use ${{CODEBUDDY_PLUGIN_ROOT}}")
                 if "python3 " not in cmd or " || python " not in cmd:
                     fail(f"{ev}: command should carry python3||python fallback chain")
+                if " || py -3 " not in cmd:
+                    fail(f"{ev}: command should carry py -3 fallback (Windows Store-stub python PATHs)")
                 if not h.get("statusMessage"):
                     fail(f"{ev}: statusMessage missing")
                 t = h.get("timeout")

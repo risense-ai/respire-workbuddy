@@ -6,6 +6,7 @@
 # 铁律: fail-open —— 任何异常 → 空 stdout、exit 0（协议里即「无决策、放行」），绝不 exit 2。
 from __future__ import annotations
 
+import datetime
 import json
 import os
 import re
@@ -14,13 +15,14 @@ import subprocess
 import sys
 import time
 
-VERSION = "0.3.3"
+VERSION = "0.4.1"
 
 # 超时窗（秒）：须盖住 rsrs runtime 冷启动（实测 doctor 模型加载 7s+），否则首轮静默、热后即灵
 RECALL_T = 14
 PROBE_T = 10
 STORE_T = 18
 LOG_MAX = 256 * 1024  # hook.log 超此整文件清轮
+LIST_T = 6    # Stop 查「最近一条落库时间」的窗口（实测 list ~0.9s，热后即回）
 
 DEFAULTS = {
     "rsrs": "",                 # respire 引擎（rsrs）路径；空 = 自动探测
@@ -31,7 +33,7 @@ DEFAULTS = {
     "budget_chars": 1500,       # 单轮注入总字数预算
     "log": True,                # hook.log 轻量留痕（每事件一行，复盘时灵时不灵的抓手）
     "enabled": True,           # 总开关：false=记忆层全线静默（WorkBuddy 插件页亦可逐组件关 hook）
-    "store_nudge_every": 0,     # Stop 存储检查节流：0=默认关（0.3.3 起 hooks.json 不再注册 Stop，此项仅在手动加回 Stop 时生效）；1=每轮、N=每 N 轮
+    "store_nudge_every": 1,     # Stop 存储检查节流：1=每轮、N=每 N 轮一次、0=关闭（每轮=多一轮模型小调用）
     "skip_prefixes": [],        # 宿主内部提示白名单：命中这些前缀的 prompt 不召回也不落库（如宿主给自动化任务写的 Recap；默认空，按需配置）
 }
 
@@ -39,29 +41,45 @@ DEFAULTS = {
 STORE_PREFIX = re.compile(r"^(?:记|存|记录|记住|remember|store)\s*[:：]\s*", re.I)
 # 本轮跳过召回
 SKIP_PREFIX = re.compile(r"^(?:/nomem|#nomem)\b")
+# 技能指认前缀：$skill: 名称 后才是真任务——技能名会词面污染召回 query，须剥掉
+SKILL_PREFIX = re.compile(r"^\$\s*skill\s*:\s*\S+\s*", re.I)
+# 疑似凭据扫描：命中则该条 prompt 不发引擎（不召回也不落库）——与 codex/pi/dsh 侧同一正则口径
+SECRET_RE = re.compile(
+    r"-----BEGIN (?:[A-Z]+ )?PRIVATE KEY-----"
+    r"|\b(?:sk-|gh[pousr]_|github_pat_|xox[baprs]-)[A-Za-z0-9_-]{12,}"
+    r"|\bBearer\s+[A-Za-z0-9._~+/-]{12,}"
+    r"|(?:password|passwd|api[_ -]?key|token|secret|密码|口令|私钥)\s*[:=：]\s*\S+",
+    re.I)
 
-RULES = """【respire 记忆层 · 已挂接】本机 respire（rsrs）记忆库随本会话生效；数据本地加密、云端同步（账号注册与登录不归本层管，见 rsrs.rs）。
-1. 答前先翻忆：rsrs recall "项目名+关键词"（--json 结构化、--titles 只要 id+标题）；报错、异常先按报错原文翻忆。
-2. 收尾可存：rsrs remember "内容" --title "事实句" --importance important（判后即存：相似会给候选，先决断再发）。**title 是召回与判重的门面，须你从内容抽取「主语＋动作＋结果」的完整事实句，禁主题分类名、禁硬截断**；prompt 以「记：」开头时由本层先落库保底——回执带暂拟标题与短 id，**你须抽取更准的事实句并 rsrs retitle <短id> --title 替换**。
-3. 每轮自动召回已随 prompt 注入；**未见召回注入、命中不贴题、或话题涉及此前的项目、报错、约定、日期时，换词 rsrs recall 补查再答（同义词、上位词、英文对应词各试一路），可见地调用**；仅当已有注入确实相关方才勿重复。本轮加 /nomem 前缀可关闭自动召回。
-4. 口令、证件号、手机号、卡号、私钥禁入记忆正文与查询词，只写存放位置——库虽加密，密钥泄露即全裸。
-5. 同步 rsrs sync（autosync 常开）、rsrs status 查态、rsrs prompt 读完整工作流；深用法见 respire 技能。"""
 
-NO_RSRS = """【respire·引擎未装】插件已就绪，只差引擎。请立即代为执行安装，无需等用户：
+def contains_secret(text: str) -> bool:
+    return bool(SECRET_RE.search(text))
+
+
+SECRET_SKIP = ("【respire · skipped】The input looks like it contains a credential — it was not sent "
+               "to the memory engine. Provide only the fact with the secret removed, or a safe location pointer.")
+
+RULES = """【respire memory layer · attached】This session is backed by the local respire (rsrs) memory store; data is encrypted locally and synced to the cloud (account registration and login are outside this layer, see rsrs.rs).
+1. Recall before answering: rsrs recall "project name + keywords" (--json for structured output, --titles for id+title only); on errors or anomalies, recall using the original error text first.
+2. Store when wrapping up: rsrs remember "content" --title "fact sentence" --importance important (judge first, store immediately: similar items return candidates, decide before sending). **title is the facade for recall and dedup — extract a complete fact sentence of "subject + action + result" from the content; never use a topic label, never truncate mid-phrase**; when the prompt starts with "记：" this layer stores it first as a fallback — if the receipt includes a provisional title and short id, **extract a more precise fact sentence and replace it with rsrs retitle <short-id> --title**.
+3. Automatic recall is injected with each prompt; **if no recall was injected, the hits are off-topic, or the topic involves an earlier project, error, agreement, or date, recall again with different wording before answering (try synonyms, hypernyms, and English equivalents, one route each), and call it visibly**; do not repeat only when the injected hits are truly relevant. Prefix /nomem to disable automatic recall for this turn.
+4. Never put passwords, ID numbers, phone numbers, card numbers, or private keys into memory bodies or query terms — record only where they are stored. The library is encrypted, but a leaked key exposes everything.
+5. Sync with rsrs sync (autosync is on), check state with rsrs status, read the full workflow with rsrs prompt; see the respire skill for advanced usage."""
+
+NO_RSRS = """【respire · engine missing】The plugin is ready; only the engine is missing. Install it now on the user's behalf, without waiting:
   npm i -g rsrs-cli@latest
-（无全局写权限时先试：npm config set prefix ~/.npm-global && npm i -g rsrs-cli@latest）
-装完跑 rsrs --version 确认——本层每轮实时探测，装完同会话内即恢复召回与「记：」落库。
-数据安全（用户问到就直说）：可离线使用——记忆库是本机本地库，不联网、不注册、不登录照样召回与落库，离线写入留本地队列、联网后补同步；同步到云端的只有密文——本地加密后才上传，服务端只存加密记录、拿不到解密密钥；企业可自建同步服务器——respire-server 用 Docker Compose + Postgres 部署进内网，数据不出企业网络。
-配置下一步（你顺手引导即可）：rsrs status 查登录态；未登录则请用户去 https://rsrs.rs 注册后本机跑 rsrs register --user <名>（登录密码本人设≥8位；**超级密码绝不自造、绝不传 --super**——系统自动生成 A3-… 恢复码并在输出中醒目列出，**务必抄下保存**，丢失则任何设备都解不开记忆）；日常 rsrs login；语义模型可选，想要更好召回再 rsrs model install && rsrs model activate m3。若已误填自定义超级密码，跑 rsrs super-reset 重发 A3 码。"""
+(If global writes are denied, first try: npm config set prefix ~/.npm-global && npm i -g rsrs-cli@latest)
+Then run rsrs --version to confirm — this layer probes every turn and resumes recall and "记：" storage within the same session.
+When the user asks about data storage security, state it plainly: fully offline — the store is a local database, recall and store work with no network, no registration, no login, and offline writes queue locally until sync; only ciphertext reaches the cloud — records are encrypted locally before upload, the server stores encrypted records only and has no decryption key; enterprises can self-host the sync server (respire-server, Docker Compose + Postgres on the intranet), so their data never leaves their network.
+Next steps to guide (mention them in passing): rsrs status checks login state; if signed out, run rsrs register with the user on this machine — no website step (the user sets a login password of at least 8 characters; **never invent a super password and never pass --super** — the system generates an A3-… recovery code and prints it prominently; **copy and keep it**, or the memory cannot be unlocked on any device); later authorizations use rsrs login (with --oauth --no-open you can hand the authorization link to the user); the semantic model is optional — for better recall run rsrs model install && rsrs model activate m3. If a custom super password was entered by mistake, run rsrs super-reset to reissue an A3 code."""
 
-LOGIN_NUDGE = """注意：本机 respire 尚未登录——记忆只存本机、不同步、不跨设备。引导用户：去 rsrs.rs 注册后跑 rsrs register（登录密码本人设；**超级密码由系统自动生成 A3-… 恢复码，不要自造，务必保存**）；日常登录可由你代跑 rsrs login --oauth --no-open，把授权链接交给用户点击。"""
+LOGIN_NUDGE = """Note: respire is not signed in on this machine — memory stays local, does not sync, and does not cross devices. Guide the user: run rsrs register on this machine to create the account (the user sets the login password; **the super password is a system-generated A3-… recovery code — never invent one, and keep it safe**). If an account already exists, you may run rsrs login --oauth --no-open and give the authorization link to the user."""
 
-EMPTY_NUDGE = """注意：本机 respire 记忆库还是空的——没有记忆可召回，自动召回无动静是正常而非故障。引导：用「记：〈事实〉」由本层落库，或让 agent 先把既有项目的约定、报错教训、关键结论 rsrs remember 存上几条；既有规则与记忆可一次成库——让 agent 读 ~/.workbuddy/SOUL.md、~/.workbuddy/USER.md 与各项目 AGENTS.md，分析抽条后分条存入（口令证件卡号排除）；有货之后每轮召回才有内容。"""
+EMPTY_NUDGE = """Note: the local respire memory store is empty — there is nothing to recall; silent automatic recall is expected, not a failure. Guide the user: store a fact with "记：<fact>", or have the agent first rsrs remember existing project agreements, error lessons, and key conclusions; existing rules and memory can be imported in one pass — have the agent read ~/AGENTS.md, project AGENTS.md files, ~/.workbuddy/SOUL.md and ~/.workbuddy/USER.md, extract facts, and store them one by one (excluding passwords, ID numbers, card numbers). Recall has content only after the store is populated."""
 
-NO_MODEL = """注意：respire 语义模型（BGE-M3）未装——现为词面档。**完全可用**：注册、登录、同步与召回都不依赖模型；想要更好效果再装：rsrs model install 下载模型（量化版约 570MB），再 rsrs model activate m3 建索引激活召升降为语义档（可代跑，建索引可后台挂起）。"""
+NO_MODEL = """Note: the respire semantic model (BGE-M3) is not installed — the lexical tier is active. **Fully usable**: registration, login, sync, and recall do not depend on the model. For better results install it: rsrs model install downloads about 1.1GB, then rsrs model activate m3 builds the index and switches recall to the semantic tier (you may run these; indexing can run in the background)."""
 
-PROBE_FAIL = """注意：respire 状态探测失败（rsrs status 未回）——若是全新机器尚未注册，先引导用户去 rsrs.rs 注册并跑 rsrs register（首设备）；否则可能 runtime 冷启动中，首轮召回空转稍候即通，持续无回跑 rsrs doctor 诊断并转告用户。"""
-
+PROBE_FAIL = """Note: respire status probe failed (rsrs status did not respond) — if this is a new machine that has never registered, guide the user to run rsrs register on this machine; otherwise the runtime may still be cold-starting, so an empty first recall may resolve after a moment. If it persists, run rsrs doctor, diagnose, and report to the user."""
 
 _REDACT = [
     (re.compile(r"(?i)(password|passwd|pwd|密码|口令)\s*[:=：]\s*\S+"), r"\1=[REDACTED]"),
@@ -189,14 +207,14 @@ def do_store(bin_path: str, content: str, cfg: dict) -> str:
     if not content:
         log_event(cfg, "store", "empty_content")
         return ""
-    title = extract_title(content) or "respire 快存"
+    title = extract_title(content) or "respire quick store"
     t0 = time.time()
     try:
         r = run_rsrs(bin_path, ["remember", content, "--title", title,
                                 "--importance", "important", "--json"], STORE_T)
     except Exception as e:
         log_event(cfg, "store", "timeout_or_error", f"{type(e).__name__}: {e}", (time.time() - t0) * 1000)
-        return "【respire·落库】respire 超时未回，请改手动 rsrs remember 核实是否入库。"
+        return "【respire · store】respire timed out; run rsrs remember manually to verify whether it was written."
     ms = (time.time() - t0) * 1000
     try:
         doc = json.loads(r.stdout) if r.stdout else {}
@@ -208,23 +226,23 @@ def do_store(bin_path: str, content: str, cfg: dict) -> str:
     if status == "ok":
         sid = str((doc.get("summary") or {}).get("id") or "")
         log_event(cfg, "store", "ok", sid[:8], ms)
-        tail = f"（{sid[:8]}）" if sid else ""
-        return (f"【respire·落库】已存入：{title}{tail}。标题系规则暂拟——"
-                "请从内容抽取「主语＋动作＋结果」的完整事实句，"
-                f"rsrs retitle {sid[:8]} --title 替换（title 是召回与判重的门面）。")
+        tail = f" ({sid[:8]})" if sid else ""
+        return (f"【respire · stored】Saved: {title}{tail}. The title is a rule-based provisional one — "
+                "extract a complete \"subject + action + result\" fact sentence from the content and "
+                f"replace it with rsrs retitle {sid[:8]} --title (title is the facade for recall and dedup).")
     if status == "pending":
         # 判后即存判定疑似重复/可挂靠，未写入（written:false）——转述候选，模型接续决断
         log_event(cfg, "store", "pending", f"cand={len(doc.get('items') or [])}", ms)
-        lines = ["【respire·落库待决】respire 判定本条与既有记忆相似，未写入。候选："]
+        lines = ["【respire · store pending】respire judged this item similar to existing memory; nothing was written. Candidates:"]
         for it in (doc.get("items") or [])[:5]:
             if isinstance(it, dict):
                 lines.append(f"- [{it.get('name', '?')}] {it.get('value', '')}")
-        lines.append("请决断：挂靠则 rsrs remember 同文 --parent <id>；确属独立则加 --force 直写。")
+        lines.append("Decide: to attach, rerun rsrs remember with the same text --parent <id>; if it is genuinely independent, add --force to write it directly.")
         return "\n".join(lines)
     errs = doc.get("errors") or []
     msg = json.dumps(errs, ensure_ascii=False)[:200] if errs else f"status={status or r.returncode}"
     log_event(cfg, "store", "fail", msg, ms)
-    return f"【respire·落库失败】respire 未收：{msg}"
+    return f"【respire · store failed】respire did not accept it: {msg}"
 
 
 def do_recall(bin_path: str, prompt: str, cfg: dict) -> str:
@@ -274,9 +292,9 @@ def do_recall(bin_path: str, prompt: str, cfg: dict) -> str:
     budget = int(cfg["budget_chars"])
     lines, used = [], 90  # 90 留给头行上界，砍点据此提前
     for score, d in keep:
-        title = str(d.get("title") or "").strip() or "(无题)"
+        title = str(d.get("title") or "").strip() or "(untitled)"
         eid = str(d.get("id") or "")[:8]
-        stale = " →已被取代" if d.get("superseded_by") else ""
+        stale = " →superseded" if d.get("superseded_by") else ""
         line = f"- [{score:.2f}] {title}（{eid}）{stale}"
         if lines and used + len(line) + 1 > budget:
             break
@@ -285,9 +303,9 @@ def do_recall(bin_path: str, prompt: str, cfg: dict) -> str:
     if not lines:
         log_event(cfg, "recall", "budget_empty", "", ms)
         return ""
-    gate = f"阈值 {thr:g}，" if thr > 0 else "rsrs 直出，"
-    head = (f"【respire·自动召回】命中 {len(lines)} 条（{gate}标题档，"
-            "正文 rsrs show <短id> 按需读；分数是相关度不是可信度）：")
+    gate = f"threshold {thr:g}, " if thr > 0 else "rsrs direct, "
+    head = (f"【respire · auto-recall】matched {len(lines)} item(s) ({gate}title tier; "
+            "read bodies on demand with rsrs show <short-id>; scores are relevance, not confidence):")
     log_event(cfg, "recall", "hit", f"n={len(lines)} max={max_score:.3f} q={prompt[:40]}", ms)
     return "\n".join([head] + lines)
 
@@ -341,10 +359,44 @@ def check_model():
         return None  # 探测失败不打扰
 
 
-STORE_NUDGE = ("记忆检查（自动一次）：只做一件事——若你本轮产生了新的**事实、决定、约定、教训或踩坑**，"
-               "用 rsrs remember 分条存入（--importance important；标题按「主语＋动作＋结果」事实句；"
-               "判重给候选先 rsrs 决策挂靠或 --force）；若本轮只是问答闲聊而无新事实，直接结束、勿重复作答。"
-               "存完或无需存即结束。")
+STORE_NUDGE = ("Memory check (automatic, once): do only one thing — if this turn produced new **facts, decisions, "
+               "agreements, lessons, or pitfalls**, store them one by one with rsrs remember (--importance important; "
+               "titles as \"subject + action + result\" fact sentences; on dedup candidates, decide to attach with --parent "
+               "or force with --force first); if this turn was just Q&A or chat with no new facts, end directly and do not "
+               "repeat the answer. End after storing or when nothing needs storing.")
+
+
+def _epoch(rfc3339):
+    """'2026-10-22T15:06:38.926Z' → epoch 秒；解析失败返回 None（不猜时区）。"""
+    if not isinstance(rfc3339, str) or not rfc3339.strip():
+        return None
+    txt = rfc3339.strip()
+    if txt.endswith(("Z", "z")):
+        txt = txt[:-1] + "+00:00"
+    try:
+        dt = datetime.datetime.fromisoformat(txt)
+    except Exception:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=datetime.timezone.utc)  # 无偏移一律按 UTC（rsrs 输出恒带 Z）
+    return dt.timestamp()
+
+
+def engine_last_store(engine, timeout: int = LIST_T):
+    """问引擎最近一条记录的落库时间（秒级 epoch），取 top3 的 updated/created 最大值。
+    agent 直接跑 rsrs remember 不写本层 hook.log，节流必须问库才看得见。失败返回 None（放行给上层催）。"""
+    r = run_rsrs(engine, ["list", "--limit", "3", "--json"], timeout)
+    doc = json.loads(r.stdout) if r.stdout else None
+    dets = doc.get("details") if isinstance(doc, dict) else None
+    best = None
+    for d in (dets or []):
+        if not isinstance(d, dict):
+            continue
+        for k in ("updated_at", "created_at"):
+            v = _epoch(d.get(k))
+            if v is not None and (best is None or v > best):
+                best = v
+    return best
 
 
 def on_stop(data: dict, cfg: dict, engine) -> str:
@@ -355,7 +407,7 @@ def on_stop(data: dict, cfg: dict, engine) -> str:
         return ""
     if not engine:
         return ""
-    every = int(cfg.get("store_nudge_every", 0))
+    every = int(cfg.get("store_nudge_every", 1))
     if every <= 0:
         return ""
     try:  # 节流计数（失败则不拦）
@@ -375,9 +427,9 @@ def on_stop(data: dict, cfg: dict, engine) -> str:
             return ""
     except Exception:
         pass
-    try:  # 近 10 分钟本层已落库过 → 不再催（记忆活跃）
+    now = time.time()
+    try:  # 近 10 分钟本层已落库过 → 不再催（记忆活跃）：钩子侧「记：」路径写本层日志
         logp = os.environ.get("RESPITE_LOG") or os.path.join(data_dir(), "hook.log")
-        now = time.time()
         if os.path.exists(logp):
             with open(logp, encoding="utf-8", errors="replace") as f:
                 for ln in f.readlines()[-50:]:
@@ -391,8 +443,17 @@ def on_stop(data: dict, cfg: dict, engine) -> str:
                         except Exception:
                             continue
                         if now - ts < 600:
-                            log_event(cfg, "stop", "stored_recent_skip")
+                            log_event(cfg, "stop", "stored_recent_skip", "src=hooklog")
                             return ""
+    except Exception:
+        pass
+    try:  # 近 10 分钟引擎侧有落库（agent 直接 rsrs remember/update）→ 同样不催，问库而非看日志
+        if engine:
+            t1 = time.time()
+            ts = engine_last_store(engine)
+            if ts is not None and now - ts < 600:
+                log_event(cfg, "stop", "stored_recent_skip", "src=engine", (time.time() - t1) * 1000)
+                return ""
     except Exception:
         pass
     log_event(cfg, "stop", "nudge")
@@ -421,6 +482,10 @@ def on_prompt(data: dict, cfg: dict, engine) -> str:
         if isinstance(pat, str) and pat and prompt[:len(pat)].lower() == pat.lower():
             log_event(cfg, "prompt", "internal_skip", pat)
             return ""
+    if contains_secret(prompt):
+        # 只记固定原因码：redact 不覆盖 api_key/token/secret 赋值与 Bearer 值，prompt 摘要不得落日志
+        log_event(cfg, "prompt", "secret_skip")
+        return SECRET_SKIP
     m = STORE_PREFIX.match(prompt)
     if m:
         rest = prompt[m.end():].strip()
@@ -434,7 +499,8 @@ def on_prompt(data: dict, cfg: dict, engine) -> str:
     if not engine:
         log_event(cfg, "recall", "engine_missing", prompt[:40])
         return ""
-    return do_recall(engine, prompt, cfg)
+    query = SKILL_PREFIX.sub("", prompt).strip() or prompt  # 技能指认轮剥前缀，防技能名污染召回 query
+    return do_recall(engine, query, cfg)
 
 
 def main() -> None:

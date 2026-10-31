@@ -86,6 +86,7 @@ python3 connector/install_local.py --uninstall  # 卸（保留市场注册）
 | --- | --- | --- |
 | 单轮 | prompt 前缀 `/nomem` | 只关本轮召回 |
 | 总开关 | `hooks/respire.config.json` 设 `"enabled": false` | 记忆层全线静默（简则/召回/落库），hook.log 留 `disabled` 痕 |
+| 只关存催 | `hooks/respire.config.json` 设 `"store_nudge_every": 0` | Stop 钩子保留注册但检查静默，召回与落库不受影响 |
 | 组件级 | WorkBuddy 插件页对 respire 的 **hook 组件**逐项开关（`skill`/`hook`/`mcp` 原生支持） | WorkBuddy 侧直接卸力 |
 
 ## 装上后发生什么
@@ -95,7 +96,7 @@ python3 connector/install_local.py --uninstall  # 卸（保留市场注册）
 | `SessionStart` | 注入记忆层简则（何时翻忆、如何落库、红线），对整会话生效；**一次探测三态**——未登录附注册引导（rsrs.rs 注册、`rsrs register` 首设备、`rsrs login --oauth --no-open` 代开授权链接）、库空（<10 条）附首日存料与导入引导、缺语义模型附**可选**装法；常态零打扰 |
 | `UserPromptSubmit` | 自动 `rsrs recall --titles`：**标题档注入**——只给分数＋8 位短 id＋标题，正文由 agent `rsrs show <id>` 按需取（附因果链）；默认**直出不过滤**，噪音边界＝rsrs skip 门＋limit 5＋标题档 |
 | `prompt` 以「记：」「存：」「remember:」开头 | 直接 `rsrs remember … --importance important` 落库并回执；判后即存判为相似时**不写入**、回执转述候选（`--parent` 挂靠或 `--force` 直写），由模型决断；回执硬约束 AI 抽「主语＋动作＋结果」事实句 `retitle` 替换暂拟题 |
-| `Stop`（AI 干完活） | **0.3.3 起默认不注册**（此前默认开：干完活续跑一轮催存，噪音大）。需要者自行在 `hooks/hooks.json` 加回 Stop 事件并把 `store_nudge_every` 设为 1/N；代码分支仍在（防循环：`stop_hook_active=true` 放行；近 10 分钟已落库不催） |
+| `Stop`（AI 干完活） | **默认注册**（0.4.1 恢复），存储检查续跑一轮催存；`store_nudge_every` 节流——默认 1=每轮检查，设 0 关闭、设 N 每 N 轮一次。防误催三道：`stop_hook_active=true` 放行；近 10 分钟本层已落库不催；近 10 分钟引擎侧有落库（agent 直接 `rsrs remember` 也算）同样不催 |
 | `prompt` 以 `/nomem` 开头 | 本轮跳过召回 |
 | `skills/respire` | 按需加载的操作法（recall/remember/show/forget/sync 与信封解析要点）；**注意技能只是说明书，动作全由钩子驱动** |
 
@@ -122,7 +123,7 @@ python3 connector/install_local.py --uninstall  # 卸（保留市场注册）
 | `session_rules` | `true` | 是否注入 SessionStart 简则 |
 | `budget_chars` | `1500` | 单轮注入总预算（标题行远短于此） |
 | `enabled` | `true` | **总开关**：false=全线静默 |
-| `store_nudge_every` | `0` | Stop 存储检查节流：**0=默认关**（hooks.json 不注册 Stop）；手动加回 Stop 后 1=每轮、N=每 N 轮 |
+| `store_nudge_every` | `1` | Stop 存储检查节流：1=默认每轮检查、N=每 N 轮一次、**0=关闭**（Stop 钩子仍注册，仅检查静默） |
 | `log` | `true` | `hooks/hook.log` 留痕（超 256KB 清轮，口令/token/长数字自动打码） |
 | `skip_prefixes` | `[]` | 宿主内部提示白名单：prompt 以列表中任一前缀开头（大小写不敏感）则本轮不召回也不落库——宿主给自动化任务写 Recap 之类时按需加 |
 
@@ -143,7 +144,7 @@ codebuddy plugin uninstall respire@risense-workbuddy
 - **纯文本输出**：stdout 即 additionalContext，没有误拦面；Stop 走 `hookSpecificOutput.permissionDecision`（WorkBuddy 现协议），不用已弃用的 `decision:"block"`
 - **标题档注入**：`recall --titles` 只回 id/score/title，正文交 `show` 按需拉取；`superseded_by` 标「已被取代」
 - **判后即存尊重设计**：落库不带 `--force`，`pending` 候选原样转述给模型决断
-- **`${CODEBUDDY_PLUGIN_ROOT}` 占位符**：WorkBuddy 运行时替换为插件安装根，跨机器自洽；command 带 `python3 || python` 回退链
+- **`${CODEBUDDY_PLUGIN_ROOT}` 占位符**：WorkBuddy 运行时替换为插件安装根，跨机器自洽；command 带 `python3 || python || py -3` 回退链（Windows 宿主以 cmd.exe spawn 钩子，`python3`/`python` 可能被 Microsoft Store 别名桩接管，`py` 启动器随官方安装器入 PATH 作第三回退）
 - **包内自检**：`python3 plugins/respire/scripts/validate_plugin.py`（结构/清单/hooks 形状/可编译/fail-open/敏感扫描），分发前必跑
 
 ## 已知边界

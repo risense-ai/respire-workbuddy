@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.4.1 — 2026-10-31 · Stop 恢复＋提示词英文化（dimcode 同款）＋疑似凭据拦截
+
+- **hooks.json 命令追加第三回退 `|| py -3`**：真实 WorkBuddy 宿主（Windows）以 cmd.exe spawn 钩子命令，默认 PATH 下 `python3`/`python` 均被 Microsoft Store 别名桩接管（实测 rc=49、报 "Python was not found"），原双回退链在装有 python.org Python 的 Windows 宿主上全数落空；`py` 启动器随官方安装器入 PATH，作第三回退。validate 同步要求三事件携带该回退。
+- **Stop 存储检查恢复注册**（0.3.3 起默认关闭）：hooks.json 重新接线三事件；`store_nudge_every` 恢复默认 1；补齐 0.5.4 时代的两块演进——`engine_last_store()` 问引擎（agent 直接 `rsrs remember` 也算近期落库、不再误催）与 `src=hooklog/src=engine` 留痕区分；输出仍走 WorkBuddy 协议 `hookSpecificOutput.permissionDecision=deny`。
+- 模型可见文本全量英文化（dimcode 0.5.6 同款）：RULES / NO_RSRS / LOGIN_NUDGE / EMPTY_NUDGE / NO_MODEL / PROBE_FAIL / STORE_NUDGE、落库回执、召回头行全部改英文；「记：」「store:」前缀兼容不变。
+- 新增输入侧疑似凭据扫描（`contains_secret`）与 `$skill:` 技能指认前缀剥除（对齐 qoder 0.6.8）；命中 prompt 不召回也不落库，注入 `SECRET_SKIP` 提示。
+- 安装与注册口径对齐 CLI 现状：`rsrs-cli@latest`；本机 `rsrs register` 直注、无网站步骤。
+- 测试 37 → 41：断言随英文输出同步；新增疑似凭据不召回 / 不落库两条；Windows 下 stub 引擎包一层 `.cmd`（python 脚本不能被 CreateProcess 直接 exec，此前桩测试在本机全数误报失败）。
+
 ## 0.4.0 — 2026-10-29
 
 新增**连接器形态**：插件 hooks 在桌面端实测不被加载，故把 rsrs 另做一份官方连接器（CLI+Skill），连接器页可见、技能 `respire-memory` 按需调用。
