@@ -97,8 +97,8 @@ def prepare() -> None:
     verify_zip(data, tag, sha)
     (out / filename).write_bytes(data)
     digest = hashlib.sha256(data).hexdigest()
-    (out / 'SHA256SUMS').write_text(f'{digest}  {filename}\n')
-    (out / 'release.json').write_text(json.dumps({'tag': tag, 'sha': sha, 'filename': filename}) + '\n')
+    (out / 'SHA256SUMS').write_text(f'{digest}  {filename}\n', encoding="utf-8")
+    (out / 'release.json').write_text(json.dumps({'tag': tag, 'sha': sha, 'filename': filename}) + '\n', encoding="utf-8")
     notes = f'''respire-workbuddy {tag[1:]}
 
 Source commit: {sha}
@@ -113,7 +113,7 @@ The original 0.4.1 source received independent Linux isolation verification: 66 
 
 sha256 {digest}
 '''
-    (out / 'notes.md').write_text(notes)
+    (out / 'notes.md').write_text(notes, encoding="utf-8")
     if os.environ.get('GITHUB_OUTPUT'):
         with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
             output.write(f'tag={tag}\nsha={sha}\npublish={str(publish).lower()}\n')
@@ -149,7 +149,7 @@ def create_draft(tag: str, sha: str, notes: str) -> dict:
         request = Path(temporary) / 'draft.json'
         request.write_text(json.dumps({'tag_name': tag, 'target_commitish': sha,
                                       'name': f'respire-workbuddy {tag[1:]}',
-                                      'body': notes, 'draft': True}))
+                                      'body': notes, 'draft': True}), encoding="utf-8")
         result = json.loads(command('gh', 'api', '--method', 'POST',
                                     f'repos/{REPO}/releases', '--input', str(request)))
     if result.get('tag_name') != tag or not result.get('draft') or not result.get('id'):
@@ -165,7 +165,7 @@ def publish() -> None:
             (event == 'workflow_dispatch' and ref == 'refs/heads/main')):
         raise ValueError('Publishing is forbidden for this event/ref')
     out = Path('release-out')
-    meta = json.loads((out / 'release.json').read_text())
+    meta = json.loads((out / 'release.json').read_text(encoding="utf-8"))
     tag, sha = os.environ['RELEASE_TAG'], os.environ['EXPECTED_SHA']
     validate_identity(tag, sha)
     filename = f'respire-workbuddy-{tag[1:]}.zip'
@@ -174,7 +174,7 @@ def publish() -> None:
     data = (out / filename).read_bytes()
     verify_zip(data, tag, sha)
     digest = hashlib.sha256(data).hexdigest()
-    if (out / 'SHA256SUMS').read_text() != f'{digest}  {filename}\n':
+    if (out / 'SHA256SUMS').read_text(encoding="utf-8") != f'{digest}  {filename}\n':
         raise ValueError('Artifact checksum mismatch')
     remote = json.loads(command('gh', 'api', f'repos/{REPO}/git/ref/tags/{tag}'))['object']
     if remote['type'] == 'tag':
@@ -188,7 +188,7 @@ def publish() -> None:
     if len(matches) > 1:
         raise ValueError('Multiple releases for this tag')
     if not matches:
-        matches = [create_draft(tag, sha, (out / 'notes.md').read_text())]
+        matches = [create_draft(tag, sha, (out / 'notes.md').read_text(encoding="utf-8"))]
     release = matches[0]
     for name in asset_plan(release, expected, sha):
         subprocess.run(['gh', 'release', 'upload', tag, str(out / name), '--repo', REPO], check=True)

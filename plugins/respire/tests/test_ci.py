@@ -80,18 +80,18 @@ elif sub == 'list':
     ts = datetime.datetime.now(datetime.timezone.utc).isoformat() if mode == 'recent' else '2020-01-01T00:00:00Z'
     print(json.dumps({'status':'fail'} if mode == 'failed' else {'status':'ok','details':[{'id':'record','updated_at':ts}]}))
 else: sys.exit(1)
-''')
+''', encoding="utf-8")
         if os.name == 'nt':
             self.engine = self.case / 'rsrs-spy.cmd'
-            self.engine.write_text(f'@echo off\n"{sys.executable}" "{self.spy}" %*\n')
+            self.engine.write_text(f'@echo off\n"{sys.executable}" "{self.spy}" %*\n', encoding="utf-8")
         else:
             self.engine = self.case / 'rsrs-spy'
-            self.engine.write_text(f'#!{sys.executable}\n' + self.spy.read_text(encoding="utf-8"))
+            self.engine.write_text(f'#!{sys.executable}\n' + self.spy.read_text(encoding="utf-8"), encoding="utf-8")
         self.engine.chmod(0o700)
         self.config = self.case / 'config.json'
-        self.config.write_text(json.dumps({'rsrs': str(self.engine), 'session_rules': True}))
+        self.config.write_text(json.dumps({'rsrs': str(self.engine), 'session_rules': True}), encoding="utf-8")
         self.launcher = self.case / 'launcher.py'
-        self.launcher.write_text(LAUNCHER)
+        self.launcher.write_text(LAUNCHER, encoding="utf-8")
         self.env = {k: v for k, v in os.environ.items()
                     if k.upper() in {'PATH', 'SYSTEMROOT', 'WINDIR', 'PATHEXT', 'TEMP', 'TMP', 'COMSPEC'}}
         self.env.update(RESPITE_CONFIG=str(self.config), RESPITE_LOG=str(self.log),
@@ -108,7 +108,7 @@ else: sys.exit(1)
 
     def call(self, prompt='', event='UserPromptSubmit', mode='ok', active=False, every=1):
         self.config.write_text(json.dumps({'rsrs':str(self.engine), 'session_rules':True,
-                                          'store_nudge_every':every}))
+                                          'store_nudge_every':every}), encoding="utf-8")
         if event == 'Stop':
             args = ['list','--limit','3','--json']
         elif event == 'SessionStart':
@@ -169,9 +169,9 @@ else: sys.exit(1)
         # A valid executable that does not record/return JSON must never count as
         # proof of a zero-call guard. This explicitly exercises that failure.
         if os.name == 'nt':
-            self.spy.write_text('import sys\nsys.exit(7)\n')
+            self.spy.write_text('import sys\nsys.exit(7)\n', encoding="utf-8")
         else:
-            self.engine.write_text(f'#!{sys.executable}\nimport sys\nsys.exit(7)\n')
+            self.engine.write_text(f'#!{sys.executable}\nimport sys\nsys.exit(7)\n', encoding="utf-8")
         with self.assertRaisesRegex(AssertionError, 'Live spy must record normal input'):
             self.positive_control()
 
@@ -257,7 +257,7 @@ class VersionConsistency(unittest.TestCase):
                         next(item for item in doc['plugins'] if item['name'] == 'respire')['version'] = '999.0.0'
                     else:
                         doc['version'] = '999.0.0'
-                    path.write_text(json.dumps(doc))
+                    path.write_text(json.dumps(doc), encoding="utf-8")
                 env = {k:v for k,v in os.environ.items() if k.upper() in {'PATH','SYSTEMROOT','WINDIR','PATHEXT','TEMP','TMP','COMSPEC'}}
                 env.update(HOME=str(fixture / 'home'), USERPROFILE=str(fixture / 'home'))
                 result = subprocess.run([sys.executable, str(fixture / 'plugins/respire/scripts/validate_plugin.py')],
