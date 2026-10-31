@@ -35,7 +35,7 @@ case = pathlib.Path(os.environ['RESPITE_CONFIG']).resolve().parent
 expected = os.environ['TEST_ENGINE']
 expected_argv = json.loads(os.environ['TEST_EXPECTED_ARGV'])
 assert expected_argv[0] == expected
-config = json.loads(pathlib.Path(os.environ['RESPITE_CONFIG']).read_text())
+config = json.loads(pathlib.Path(os.environ['RESPITE_CONFIG']).read_text(encoding="utf-8"))
 assert config['rsrs'] == expected and os.access(expected, os.X_OK)
 sys.path.insert(0, str(pathlib.Path(os.environ['TEST_HOOK']).parents[1] / 'tests'))
 from test_ci import allowed_process
@@ -86,7 +86,7 @@ else: sys.exit(1)
             self.engine.write_text(f'@echo off\n"{sys.executable}" "{self.spy}" %*\n')
         else:
             self.engine = self.case / 'rsrs-spy'
-            self.engine.write_text(f'#!{sys.executable}\n' + self.spy.read_text())
+            self.engine.write_text(f'#!{sys.executable}\n' + self.spy.read_text(encoding="utf-8"))
         self.engine.chmod(0o700)
         self.config = self.case / 'config.json'
         self.config.write_text(json.dumps({'rsrs': str(self.engine), 'session_rules': True}))
@@ -130,7 +130,7 @@ else: sys.exit(1)
         return result.stdout
 
     def recorded(self):
-        return [json.loads(line) for line in self.calls.read_text().splitlines()] if self.calls.exists() else []
+        return [json.loads(line) for line in self.calls.read_text(encoding="utf-8").splitlines()] if self.calls.exists() else []
 
     def positive_control(self):
         before = len(self.recorded())
@@ -151,8 +151,8 @@ else: sys.exit(1)
         self.assertIn('contains a credential', output)
         self.assertEqual(self.recorded(), before)
         self.assertNotIn(SECRET, output)
-        self.assertNotIn(SECRET, self.log.read_text())
-        entries = [json.loads(line) for line in self.log.read_text().splitlines()]
+        self.assertNotIn(SECRET, self.log.read_text(encoding="utf-8"))
+        entries = [json.loads(line) for line in self.log.read_text(encoding="utf-8").splitlines()]
         skipped = [entry for entry in entries if entry['out'] == 'secret_skip']
         self.assertEqual(len(skipped), 1)
         self.assertNotIn('d', skipped[0])
@@ -163,7 +163,7 @@ else: sys.exit(1)
         output = self.call('记：数据库密码 = hunter2u')
         self.assertIn('contains a credential', output)
         self.assertEqual(self.recorded(), before)
-        self.assertNotIn('hunter2u', output + self.log.read_text())
+        self.assertNotIn('hunter2u', output + self.log.read_text(encoding="utf-8"))
 
     def test_dead_spy_must_fail_positive_control(self):
         # A valid executable that does not record/return JSON must never count as
@@ -191,10 +191,10 @@ else: sys.exit(1)
         out = json.loads(self.call(event='Stop'))
         self.assertEqual(out['hookSpecificOutput']['permissionDecision'], 'deny')
         self.assertIn('rsrs remember', out['reason'])
-        before, count = self.recorded(), (self.case / 'nudge').read_text()
+        before, count = self.recorded(), (self.case / 'nudge').read_text(encoding="utf-8")
         self.assertEqual(self.call(event='Stop', active=True), '')
         self.assertEqual(self.recorded(), before)
-        self.assertEqual((self.case / 'nudge').read_text(), count)
+        self.assertEqual((self.case / 'nudge').read_text(encoding="utf-8"), count)
 
     def test_stop_every_three_and_disabled_zero_calls(self):
         for number in range(1, 7):
@@ -207,7 +207,7 @@ else: sys.exit(1)
         before = self.recorded()
         self.assertEqual(self.call(event='Stop', every=0), '')
         self.assertEqual(self.recorded(), before)
-        self.assertEqual((self.case / 'nudge').read_text(), '6')
+        self.assertEqual((self.case / 'nudge').read_text(encoding="utf-8"), '6')
 
     def test_stop_recent_stale_and_failed_query(self):
         self.assertEqual(self.call(event='Stop', mode='recent'), '')
@@ -224,16 +224,16 @@ else: sys.exit(1)
     def test_malformed_spy_cannot_pass_positive_control(self):
         self.positive_control()
         self.assertEqual(self.call('ordinary input', mode='malformed'), '')
-        self.assertIn('parse_error', self.log.read_text())
+        self.assertIn('parse_error', self.log.read_text(encoding="utf-8"))
 
 
 class VersionConsistency(unittest.TestCase):
     def test_marketplace_manifest_and_hook_match(self):
         repo = ROOT.parents[1]
-        market = json.loads((repo / '.codebuddy-plugin/marketplace.json').read_text())
+        market = json.loads((repo / '.codebuddy-plugin/marketplace.json').read_text(encoding="utf-8"))
         entry = next(item for item in market['plugins'] if item['name'] == 'respire')
-        manifest = json.loads((ROOT / '.codebuddy-plugin/plugin.json').read_text())
-        hook_version = re.search(r'^VERSION = "([^"]+)"', (ROOT / 'hooks/respire.py').read_text(), re.M).group(1)
+        manifest = json.loads((ROOT / '.codebuddy-plugin/plugin.json').read_text(encoding="utf-8"))
+        hook_version = re.search(r'^VERSION = "([^"]+)"', (ROOT / 'hooks/respire.py').read_text(encoding="utf-8"), re.M).group(1)
         self.assertEqual(entry['version'], manifest['version'])
         self.assertEqual(hook_version, manifest['version'])
 
@@ -248,11 +248,11 @@ class VersionConsistency(unittest.TestCase):
                     shutil.copy2(repo / name, fixture / name)
                 if component == 'hook':
                     path = fixture / 'plugins/respire/hooks/respire.py'
-                    path.write_text(re.sub(r'^VERSION = "[^"]+"', 'VERSION = "999.0.0"', path.read_text(), count=1, flags=re.M))
+                    path.write_text(re.sub(r'^VERSION = "[^"]+"', 'VERSION = "999.0.0"', path.read_text(encoding="utf-8"), count=1, flags=re.M), encoding="utf-8")
                 else:
                     path = fixture / ('.codebuddy-plugin/marketplace.json' if component == 'marketplace'
                                       else 'plugins/respire/.codebuddy-plugin/plugin.json')
-                    doc = json.loads(path.read_text())
+                    doc = json.loads(path.read_text(encoding="utf-8"))
                     if component == 'marketplace':
                         next(item for item in doc['plugins'] if item['name'] == 'respire')['version'] = '999.0.0'
                     else:
