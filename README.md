@@ -154,6 +154,21 @@ codebuddy plugin uninstall respire@risense-workbuddy
 - **PostCompact 不可重注**（协议该事件仅副作用）：长会话压缩后简则如丢失，开新会话即复
 - **留痕**：`hooks/hook.log` 每事件一行（ts/ev/out/ms/d 含 query 摘要），按行复盘「灵不灵」
 
+## GitHub Actions CI/CD
+
+PR 和 main 在 Linux、Windows、macOS 运行包自检、独立全桩行为测试和发布策略测试，并验证归档。CI 不执行旧 `test_hooks.sh` 的真实引擎/写探针段，不安装 rsrs 或操作用户数据库。
+
+- `python plugins/respire/tests/test_ci.py`：临时桩正向召回与死桩负对照、凭据零调用/零泄漏、Stop 防重入、N=3/0 节流、近期/陈旧/查询失败，以及市场/manifest/hook 三方版本与错配负对照。
+- `python -m unittest discover -s plugins/respire/tests -p test_release.py -v`：精确 tag/SHA、ZIP 安全、版本、冲突拒绝与幂等恢复。
+
+向主仓推送 `vMAJOR.MINOR.PATCH` 标签后，工作流确认标签提交属于 main，并从该提交按历史 Release 布局归档：市场清单、文档/安装脚本及 `plugins/respire`，不混入 `connector`。ZIP 注释记录源提交，Release 附 ZIP 与 `SHA256SUMS`。
+
+恢复已有标签时，在 Actions → CI and release → Run workflow 选择 **main**，填写已有 tag 和其完整 40 位 `expected_sha`。不会移动标签、执行旧标签代码或用新 main 冒充旧标签。来源未知或资产内容不同即停止；相同资产保持不动，只补缺失资产。失败可能留下可恢复草稿；同版本 tag 与手动入口共用并发锁。
+
+工作流默认 `contents: read`，checkout 不保存凭据；仅受控发布 job 使用仓库 `GITHUB_TOKEN` 的 `contents: write`。不增加 PAT/OAuth/secret、不使用 `pull_request_target`；fork PR 不能进入写发布 job。
+
+隔离桩验证不等于真实 WorkBuddy GUI 派发/续跑验收；Windows 命令回退链仍有宿主环境边界。插件默认 Stop 开启及产品行为均保持原样。
+
 ## 测试
 
 ```bash
