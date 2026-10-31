@@ -62,6 +62,25 @@ elif sub == "remember":
                           "items": [{"name": "write", "status": "ok", "value": "id=dddddddd-9999-8888-7777-666666666666"}]}))
 PY
 chmod +x "$STUB"
+if command -v cmd.exe >/dev/null 2>&1; then
+  # Windows：python 脚本不能被 CreateProcess 直接 exec，包一层 .cmd（须在 stub 写完后生成）
+  PY3_WIN="$(cygpath -w "$PY3" 2>/dev/null || echo "$PY3")"
+  case "$PY3_WIN" in *[Aa]|*[Ee]|*[Xx]) ;; esac  # no-op keep var
+  # shim 兼容：无扩展名解释器 cmd.exe 跑不动，回退 py.exe/真实的 python.exe
+  for _cand in "py.exe" "python.exe"; do
+    _p="$(dirname "$PY3_WIN")/$_cand"
+    [ -f "$_p" ] && PY3_WIN="$_p" && break
+  done
+  if [ ! -f "$PY3_WIN" ] || [ "${PY3_WIN##*.}" != "exe" ]; then
+    _py="$(command -v py)"
+    [ -n "$_py" ] && PY3_WIN="$(cygpath -w "$_py")"
+  fi
+  cat > "$TMP/rsrs-stub.cmd" <<WRAP
+@echo off
+"$PY3_WIN" "%~dp0rsrs-stub" %*
+WRAP
+  STUB="$TMP/rsrs-stub.cmd"
+fi
 
 # run <event> [prompt] [config] [mode] [engine] [logfile]
 # config 只写非 rsrs 项（rsrs 路径由桩注入），避免覆盖被测配置；logfile 可换新文件以免「近 10 分钟已落库」跳过 Stop。
@@ -99,33 +118,35 @@ check() {   # check <名字> <实际输出> <模式: 非空|空|含:xxx|不含:x
 }
 
 echo "== ① 桩引擎：全分支（不碰真库） =="
-check "SessionStart 注入简则" "$(run SessionStart)" "含:respire 记忆层"
+check "SessionStart 注入简则" "$(run SessionStart)" "含:respire memory layer"
 check "简则点明引擎与同步" "$(run SessionStart)" "含:rsrs.rs"
-check "已登录不带登录引导" "$(run SessionStart)" "不含:尚未登录"
-check "未登录注入登录引导" "$(run SessionStart "" "$CFG_ON" logout)" "含:尚未登录"
+check "已登录不带登录引导" "$(run SessionStart)" "不含:not signed in"
+check "未登录注入登录引导" "$(run SessionStart "" "$CFG_ON" logout)" "含:not signed in"
 check "未登录引导给出注册与代登法" "$(run SessionStart "" "$CFG_ON" logout)" "含:rsrs login --oauth --no-open"
 check "session_rules=false 静默" "$(run SessionStart "" "$CFG_OFF")" "空"
 check "缺模型注入装法" "$(RESPITE_FAKE_NO_MODEL=1 run SessionStart)" "含:rsrs model activate m3"
-check "缺模型点明词面回退" "$(RESPITE_FAKE_NO_MODEL=1 run SessionStart)" "含:词面档"
-check "有货库不带空库引导" "$(run SessionStart)" "不含:记忆库还是空的"
-check "空库注入首日引导" "$(run SessionStart "" "$CFG_ON" empty)" "含:记忆库还是空的"
-check "探测失败注入冷启诊断段" "$(run SessionStart "" "$CFG_ON" fail)" "含:状态探测失败"
+check "缺模型点明词面回退" "$(RESPITE_FAKE_NO_MODEL=1 run SessionStart)" "含:lexical tier"
+check "有货库不带空库引导" "$(run SessionStart)" "不含:memory store is empty"
+check "空库注入首日引导" "$(run SessionStart "" "$CFG_ON" empty)" "含:memory store is empty"
+check "探测失败注入冷启诊断段" "$(run SessionStart "" "$CFG_ON" fail)" "含:status probe failed"
 check "召回注入标题档" "$(run UserPromptSubmit "上次的钩子注入怎么配的")" "含:桩召回命中条一"
-check "召回带被取代标记" "$(run UserPromptSubmit "上次的钩子注入怎么配的")" "含:已被取代"
+check "召回带被取代标记" "$(run UserPromptSubmit "上次的钩子注入怎么配的")" "含:superseded"
 check "召回行带短 id" "$(run UserPromptSubmit "上次的钩子注入怎么配的")" "含:aaaaaaaa"
 check "无关 prompt 零命中静默" "$(run UserPromptSubmit "无关查询桩空命中" "$CFG_ON" recall_empty)" "空"
-check "记：前缀落库回执" "$(run UserPromptSubmit "记：测试条目：钩子落库回执自测。")" "含:【respire·落库】"
+check "记：前缀落库回执" "$(run UserPromptSubmit "记：测试条目：钩子落库回执自测。")" "含:【respire · stored】"
 check "落库回执催 retitle" "$(run UserPromptSubmit "记：测试条目：钩子落库回执自测。")" "含:retitle dddddddd"
-check "落库 pending 转述候选" "$(run UserPromptSubmit "记：测试条目：判重候选自测。" "$CFG_ON" pending)" "含:落库待决"
+check "落库 pending 转述候选" "$(run UserPromptSubmit "记：测试条目：判重候选自测。" "$CFG_ON" pending)" "含:store pending"
 check "落库 pending 带挂靠法" "$(run UserPromptSubmit "记：测试条目：判重候选自测。" "$CFG_ON" pending)" "含:--force"
-check "无记：前缀不落库" "$(run UserPromptSubmit "普通问题不做落库")" "不含:【respire·落库】"
-check "store: 前缀落库回执" "$(run UserPromptSubmit "store: 测试条目：英文前缀落库自测。")" "含:【respire·落库】"
+check "无记：前缀不落库" "$(run UserPromptSubmit "普通问题不做落库")" "不含:【respire · stored】"
+check "store: 前缀落库回执" "$(run UserPromptSubmit "store: 测试条目：英文前缀落库自测。")" "含:【respire · stored】"
 check "白名单前缀跳过召回" "$(run UserPromptSubmit "你正在为宿主任务编写简短 Recap" "$CFG_SKIP")" "空"
 check "白名单前缀大小写不敏感" "$(run UserPromptSubmit "HOST INTERNAL RECAP of the session" "$CFG_SKIP")" "空"
 check "白名单不影响普通 prompt" "$(run UserPromptSubmit "普通问题照常召回注入" "$CFG_SKIP")" "含:桩召回命中条一"
+check "疑似凭据不发引擎" "$(run UserPromptSubmit "api_key = sk-abcdefghijklmnopqrst 存一下")" "含:contains a credential"
+check "疑似凭据不落库" "$(run UserPromptSubmit "记：数据库密码 = hunter2u")" "含:contains a credential"
 check "Stop 存储检查拒答续跑" "$(run Stop "" "$CFG_STOP" ok "$STUB" "$TMP/stop1.log")" "json:permissionDecision=deny"
 check "Stop 反馈带存库指令" "$(run Stop "" "$CFG_STOP" ok "$STUB" "$TMP/stop2.log")" "含:rsrs remember"
-check "hooks.json 默认不注册 Stop" "$(cat "$ROOT/hooks/hooks.json")" "不含:\"Stop\""
+check "hooks.json 注册 Stop" "$(cat "$ROOT/hooks/hooks.json")" "含:\"Stop\""
 echo "== ② 日志留痕与脱敏 =="
 run SessionStart >/dev/null
 run UserPromptSubmit "我的密码是 password: hunter2 这算敏感吗" >/dev/null
@@ -144,7 +165,7 @@ if [ "$WITH_STORE" = 1 ]; then
   echo "== ④ 写探针（写真库→断言→forget 自清理） =="
   PROBE="【respire-workbuddy 自测】钩子落库写探针，测完即删。"
   OUT="$(run UserPromptSubmit "记：$PROBE")"
-  check "真库落库回执" "$OUT" "含:【respire·落库】"
+  check "真库落库回执" "$OUT" "含:【respire · stored】"
   SID="$(printf '%s' "$OUT" | grep -oE 'retitle [0-9a-f]{8}' | head -1 | awk '{print $2}')"
   if [ -n "$SID" ] && [ -n "$RSRS" ]; then
     FULLID="$(HOME="${HOME:-$HOME}" "$RSRS" recall "$PROBE" --titles --json 2>/dev/null | "$PY3" -c 'import json,sys
@@ -161,7 +182,7 @@ for x in (d.get("details") or []):
 elif [ -n "$RSRS" ]; then
   echo "== ②′ 真机 rsrs 只读分支（跳过写） =="
   REAL_OUT="$(RESPITE_CONFIG="$CFG_ON" RESPITE_LOG="$TMP/real.log" "$PY3" "$ROOT/hooks/respire.py" SessionStart)"
-  check "真机 SessionStart 注入简则" "$REAL_OUT" "含:respire 记忆层"
+  check "真机 SessionStart 注入简则" "$REAL_OUT" "含:respire memory layer"
 else
   echo "SKIP：未找到 rsrs 真机引擎，②′ 跳过。"
 fi

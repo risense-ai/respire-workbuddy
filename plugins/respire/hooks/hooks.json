@@ -1,5 +1,5 @@
 {
-  "description": "respire memory hooks for WorkBuddy: SessionStart rules, per-round title-tier recall. Stop store check removed by default (opt-in). Review these hooks before trusting them.",
+  "description": "respire memory hooks for WorkBuddy: SessionStart rules, per-round title-tier recall, Stop storage check (throttled, engine-verified). Review these hooks before trusting them.",
   "hooks": {
     "SessionStart": [
       {
@@ -9,7 +9,7 @@
             "type": "command",
             "command": "python3 \"${CODEBUDDY_PLUGIN_ROOT}/hooks/respire.py\" SessionStart || python \"${CODEBUDDY_PLUGIN_ROOT}/hooks/respire.py\" SessionStart",
             "timeout": 20,
-            "statusMessage": "respire: 注入记忆层简则"
+            "statusMessage": "respire: injecting memory playbook"
           }
         ]
       }
@@ -21,7 +21,19 @@
             "type": "command",
             "command": "python3 \"${CODEBUDDY_PLUGIN_ROOT}/hooks/respire.py\" UserPromptSubmit || python \"${CODEBUDDY_PLUGIN_ROOT}/hooks/respire.py\" UserPromptSubmit",
             "timeout": 20,
-            "statusMessage": "respire: 检索记忆中"
+            "statusMessage": "respire: recalling memory"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CODEBUDDY_PLUGIN_ROOT}/hooks/respire.py\" Stop || python \"${CODEBUDDY_PLUGIN_ROOT}/hooks/respire.py\" Stop",
+            "timeout": 20,
+            "statusMessage": "respire: checking storage"
           }
         ]
       }
