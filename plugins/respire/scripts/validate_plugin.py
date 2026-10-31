@@ -154,6 +154,8 @@ if hooks_cfg:
                     fail(f"{ev}: command must use ${{CODEBUDDY_PLUGIN_ROOT}}")
                 if "python3 " not in cmd or " || python " not in cmd:
                     fail(f"{ev}: command should carry python3||python fallback chain")
+                if " || py -3 " not in cmd:
+                    fail(f"{ev}: command should carry py -3 fallback (Windows Store-stub python PATHs)")
                 if not h.get("statusMessage"):
                     fail(f"{ev}: statusMessage missing")
                 t = h.get("timeout")

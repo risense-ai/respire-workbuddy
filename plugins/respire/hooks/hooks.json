@@ -7,7 +7,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"${CODEBUDDY_PLUGIN_ROOT}/hooks/respire.py\" SessionStart || python \"${CODEBUDDY_PLUGIN_ROOT}/hooks/respire.py\" SessionStart",
+            "command": "python3 \"${CODEBUDDY_PLUGIN_ROOT}/hooks/respire.py\" SessionStart || python \"${CODEBUDDY_PLUGIN_ROOT}/hooks/respire.py\" SessionStart || py -3 \"${CODEBUDDY_PLUGIN_ROOT}/hooks/respire.py\" SessionStart",
             "timeout": 20,
             "statusMessage": "respire: injecting memory playbook"
           }
@@ -19,7 +19,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"${CODEBUDDY_PLUGIN_ROOT}/hooks/respire.py\" UserPromptSubmit || python \"${CODEBUDDY_PLUGIN_ROOT}/hooks/respire.py\" UserPromptSubmit",
+            "command": "python3 \"${CODEBUDDY_PLUGIN_ROOT}/hooks/respire.py\" UserPromptSubmit || python \"${CODEBUDDY_PLUGIN_ROOT}/hooks/respire.py\" UserPromptSubmit || py -3 \"${CODEBUDDY_PLUGIN_ROOT}/hooks/respire.py\" UserPromptSubmit",
             "timeout": 20,
             "statusMessage": "respire: recalling memory"
           }
@@ -31,7 +31,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"${CODEBUDDY_PLUGIN_ROOT}/hooks/respire.py\" Stop || python \"${CODEBUDDY_PLUGIN_ROOT}/hooks/respire.py\" Stop",
+            "command": "python3 \"${CODEBUDDY_PLUGIN_ROOT}/hooks/respire.py\" Stop || python \"${CODEBUDDY_PLUGIN_ROOT}/hooks/respire.py\" Stop || py -3 \"${CODEBUDDY_PLUGIN_ROOT}/hooks/respire.py\" Stop",
             "timeout": 20,
             "statusMessage": "respire: checking storage"
           }

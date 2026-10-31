@@ -184,6 +184,7 @@ check "疑似凭据不落库" "$(run UserPromptSubmit "记：数据库密码 = h
 check "Stop 存储检查拒答续跑" "$(run Stop "" "$CFG_STOP" ok "$STUB" "$TMP/stop1.log")" "json:permissionDecision=deny"
 check "Stop 反馈带存库指令" "$(run Stop "" "$CFG_STOP" ok "$STUB" "$TMP/stop2.log")" "含:rsrs remember"
 check "hooks.json 注册 Stop" "$(cat "$ROOT/hooks/hooks.json")" "含:\"Stop\""
+check "hooks.json 三事件带 py -3 回退" "$( [ "$(grep -c '|| py -3 ' "$ROOT/hooks/hooks.json")" = "3" ] && echo THREE || echo OTHER )" "含:THREE"
 # ---- Stop 分支覆盖：防重入 / 节流关闭 / 引擎近期落库不催 / 陈旧仍催 / 查询失败放行 / hook.log 已存放行放行 ----
 CFG_STOP0="$TMP/config-stop0.json"
 echo '{"session_rules": false, "store_nudge_every": 0}' > "$CFG_STOP0"
