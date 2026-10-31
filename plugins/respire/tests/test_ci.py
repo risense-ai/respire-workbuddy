@@ -95,6 +95,10 @@ else: sys.exit(1)
         self.env = {k: v for k, v in os.environ.items()
                     if k.upper() in {'PATH', 'SYSTEMROOT', 'WINDIR', 'PATHEXT', 'TEMP', 'TMP', 'COMSPEC'}}
         self.env.update(RESPITE_CONFIG=str(self.config), RESPITE_LOG=str(self.log),
+                        HOME=str(self.case / 'home'), USERPROFILE=str(self.case / 'home'),
+                        XDG_CONFIG_HOME=str(self.case / 'config'),
+                        XDG_DATA_HOME=str(self.case / 'data'),
+                        XDG_CACHE_HOME=str(self.case / 'cache'),
                         RESPITE_NUDGE_STATE=str(self.case / 'nudge'),
                         RESPITE_DATA=str(self.case / 'plugin-data'),
                         CODEBUDDY_PLUGIN_DATA=str(self.case / 'plugin-data'),
@@ -255,6 +259,7 @@ class VersionConsistency(unittest.TestCase):
                         doc['version'] = '999.0.0'
                     path.write_text(json.dumps(doc))
                 env = {k:v for k,v in os.environ.items() if k.upper() in {'PATH','SYSTEMROOT','WINDIR','PATHEXT','TEMP','TMP','COMSPEC'}}
+                env.update(HOME=str(fixture / 'home'), USERPROFILE=str(fixture / 'home'))
                 result = subprocess.run([sys.executable, str(fixture / 'plugins/respire/scripts/validate_plugin.py')],
                                         text=True, encoding='utf-8', capture_output=True, env=env, timeout=30)
                 self.assertEqual(result.returncode, 1)
