@@ -200,7 +200,7 @@ else: sys.exit(1)
                         PYTHONDONTWRITEBYTECODE='1', PYTHONUTF8='1')
 
     def call(self, prompt='', event='UserPromptSubmit', mode='ok', active=False, every=1,
-             session='s1', fast=False, extra_env=None, list_mode=None, skip=None):
+             session='s1', fast=False, extra_env=None, list_mode=None, skip=None, generation=None):
         config = {'rsrs': str(self.engine), 'session_rules': True, 'store_nudge_every': every}
         if skip is not None:
             config['skip_prefixes'] = skip
@@ -235,6 +235,8 @@ else: sys.exit(1)
         payload = {'prompt':prompt,'hook_event_name':event,'stop_hook_active':active}
         if session is not None:
             payload['session_id'] = session
+        if generation is not None:
+            payload['generation_id'] = generation  # 官方 v2.144.0+ 字段
         result = subprocess.run([sys.executable, str(self.launcher)],
                                 input=json.dumps(payload), text=True,
                                 encoding='utf-8', capture_output=True, env=env,
@@ -477,6 +479,39 @@ else: sys.exit(1)
         # 会话隔离（R3 终案后由 latch 保证）：A 会话的写回执/催存不影响 B 会话的收尾锁
         self.call('store: durable fixture fact', session='a')
         self.assertTrue(stop_denied(self.call(event='Stop', session='b')))
+
+    def test_generation_replay_does_not_rearm_latch(self):
+        # R4（官方 v2.144.0+ 契约）：同 generation 重投不重新武装；新 generation 同文本重新武装
+        # 序列：同 gen UserPromptSubmit → Stop deny → 同 gen 重投 → Stop 放行 → 新 gen 同文本 → Stop deny
+        g1 = 'gen-aaa-111'
+        self.call('real question one', generation=g1)
+        self.assertEqual(json.loads(self.call(event='Stop', generation=g1))
+                         ['hookSpecificOutput']['permissionDecision'], 'deny')
+        self.call('real question one', generation=g1)   # 同 gen 重投（迟到/重复投递）
+        self.assertEqual(self.call(event='Stop', generation=g1), '')  # 未重新武装：放行
+        g2 = 'gen-bbb-222'
+        self.call('real question one', generation=g2)   # 新 generation：同文本也是新请求
+        self.assertEqual(json.loads(self.call(event='Stop', generation=g2))
+                         ['hookSpecificOutput']['permissionDecision'], 'deny')
+
+    def test_stale_generation_cannot_undo_new_protection(self):
+        # 旧 generation 迟到到达：不撤销新 generation 已落锁/已催的状态
+        g1, g2 = 'gen-old-1', 'gen-new-2'
+        self.call('first question', generation=g1)
+        self.call('second question', generation=g2)     # 新请求（rearm）
+        self.call('first question', generation=g1)      # 旧 gen 迟到重投：不 rearm、不覆写 gen
+        self.assertEqual(json.loads(self.call(event='Stop', generation=g2))
+                         ['hookSpecificOutput']['permissionDecision'], 'deny')  # 新请求仍可催
+
+    def test_no_generation_field_keeps_compatible_behavior(self):
+        # 无 generation_id（旧宿主/旧版本）：每次非内部 UserPromptSubmit 重新武装（既有行为）
+        self.call('legacy question one')
+        self.assertEqual(json.loads(self.call(event='Stop'))
+                         ['hookSpecificOutput']['permissionDecision'], 'deny')
+        self.assertEqual(self.call(event='Stop'), '')     # latch：同请求一次
+        self.call('legacy question one')                  # 重发（无身份）：按新请求处理
+        self.assertEqual(json.loads(self.call(event='Stop'))
+                         ['hookSpecificOutput']['permissionDecision'], 'deny')
 
     def test_internal_prefix_prompt_does_not_rearm_latch(self):
         # 复审 R2#1 点名序列：真实请求→Stop deny→同会话内部 Recap（配置 skip_prefixes）→Stop

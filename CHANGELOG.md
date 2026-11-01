@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.4.7 — 2026-11-01 · 第四轮：generation 感知的一次收尾锁
+
+### Fixed
+
+- **官方 generation_id 契约（R4）**：[CodeBuddy Code v2.144.0+](https://www.workbuddy.ai/docs/cli/release-notes/v2.144.0) 的 UserPromptSubmit 携带 `generation_id`（同对话回合稳定、可与 Stop 关联）——`mark_prompt(session, generation)` 现按 **session+generation** 关联判定：**同 generation 重投/迟到/并发事件不重新武装 latch**（先比较 `st_<sid>.gen` 再决定删锁；同 gen 直接跳过 rearm）；**旧 generation 迟到不撤销新 generation 的保护**（gen 不同→忽略，不 rearm 不覆写 gen 文件）；**不同 generation 同文本正常新一轮**（正常 rearm）。无 generation_id 的旧宿主保持既有行为（每次 rearm），README 注明版本边界。gen 文件读不到时保守 rearm（兼容方向）；写入失败不影响 rearm（latch 是硬保证）。状态读取/持久化失败均保守放行，不依赖失败后继续 deny。
+
+### Changed
+
+- 测试：CI 39/39（+3：同 gen 重投不 rearm、旧 gen 迟到不撤销新保护、无字段兼容行为）。
+
+## 0.4.6 — 2026-11-01
 ## 0.4.6 — 2026-11-01 · 第三轮复审整改（PR #5 复审三项 P2，移植 zcode/dimcode 已合并终案）
 
 ### Changed

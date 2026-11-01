@@ -16,7 +16,7 @@ import subprocess
 import sys
 import time
 
-VERSION = "0.4.6"
+VERSION = "0.4.7"
 
 # 超时窗（秒）：须盖住 rsrs runtime 冷启动（实测 doctor 模型加载 7s+），否则首轮静默、热后即灵
 RECALL_T = 14
@@ -326,10 +326,51 @@ def latch_rearm(session: str) -> None:
         pass
 
 
-def mark_prompt(session: str) -> float:
+def _gen_path(session: str):
+    d = _turn_dir()
+    return os.path.join(d, "st_" + _sid_key(session) + ".gen") if d else None
+
+
+def _read_gen(session: str):
+    try:
+        with open(_gen_path(session), encoding="utf-8") as f:
+            return f.read().strip()
+    except Exception:
+        return None
+
+
+def _write_gen(session: str, gen: str) -> bool:
+    """当前 generation 标记：盲写 temp+rename（单值覆盖，无读改写）。"""
+    p = _gen_path(session)
+    if not p:
+        return False
+    try:
+        tmp = "%s.%d.tmp" % (p, os.getpid())
+        with open(tmp, "w", encoding="utf-8") as f:
+            f.write(str(gen))
+        os.replace(tmp, p)
+        return True
+    except Exception:
+        return False
+
+
+def mark_prompt(session: str, generation: str = "") -> float:
     """可识别的新真实用户请求开始：记录请求代 prompt_ts（诊断轨迹）；删除一次收尾锁（重新武装）。
-    R3 终案：免催已取消——请求代不再参与 Stop 判定，仅随状态文件留痕；防重唯一依据是 latch。"""
+    R3 终案：免催已取消——防重唯一依据是 latch。
+    R4（官方 CodeBuddy v2.144.0+ 契约）：UserPromptSubmit 携带 generation_id——
+    **同 generation 重投不重新武装**（先比较 st_<sid>.gen 再决定是否删锁）；
+    旧 generation 迟到不撤销新 generation 的保护（gen 不同→忽略，不 rearm 不覆写）；
+    无 generation_id 的旧宿主（generation=""）→ 保持既有行为（每次 rearm），README 注明边界。
+    gen 文件读不到时保守 rearm（缺字段输入的兼容方向）；写入失败不影响 rearm（latch 是硬保证）。"""
     ts = time.time()
+    if generation:
+        cur = _read_gen(session)
+        if cur is not None and cur == generation:
+            # 同 generation 重投/迟到重放：不是新请求——不 rearm、不覆写 gen
+            _state_update(session, {"prompt_ts": ts})  # 仅诊断轨迹
+            log_event({"log": True}, "prompt", "gen_replay_skip", generation[:16])
+            return ts
+        _write_gen(session, generation)
     _state_update(session, {"prompt_ts": ts})
     _state_prune()
     latch_rearm(session)
@@ -779,9 +820,10 @@ def on_prompt(data: dict, cfg: dict, engine) -> str:
         log_event(cfg, "prompt", "nomem_or_empty", prompt[:40])
         return ""
     session = str(data.get("session_id") or "")
+    generation = str(data.get("generation_id") or "")  # 官方 v2.144.0+ 字段；旧宿主为空
     if SKIP_PREFIX.match(prompt):
         # /nomem 是真实用户请求：mark（记请求代＋重新武装收尾锁）后只跳召回（T11/T18）
-        mark_prompt(session)
+        mark_prompt(session, generation)
         log_event(cfg, "prompt", "nomem_or_empty", prompt[:40])
         return ""
     for pat in (cfg.get("skip_prefixes") or []):   # 宿主内部提示白名单：不召回不落库
@@ -791,7 +833,7 @@ def on_prompt(data: dict, cfg: dict, engine) -> str:
             # 重放同一真实请求文本无请求身份可去重，保守按新请求处理（重武装不额外伤害）
             log_event(cfg, "prompt", "internal_skip", pat)
             return ""
-    req_ts = mark_prompt(session)  # 可识别的新真实请求：记请求代并重新武装收尾锁
+    req_ts = mark_prompt(session, generation)  # 新真实请求：记代并重新武装（同 gen 重投不 rearm）
     if contains_secret(prompt):
         # 只记固定原因码：redact 不覆盖 api_key/token/secret 赋值与 Bearer 值，prompt 摘要不得落日志
         log_event(cfg, "prompt", "secret_skip")
