@@ -1,49 +1,49 @@
 ---
 name: respire-memory
-description: 睿思记忆（rsrs）本地加密记忆库的操作法：recall 语义召回、remember 判重落库、show/chain 读全文与因果链、forget 墓碑删除、sync 同步、status 查态。用户提到「记忆、翻忆、查上次、记下来、存记忆、忘掉、同步、整理记忆」时使用。触发词：记忆、翻忆、recall、remember、存记忆、忘掉、同步。
+description: respire (rsrs) local encrypted memory playbook: recall for semantic search, remember to store after dedup, show/chain to read full bodies and causal chains, forget to tombstone-delete, sync to synchronize, status to check state. Use when the user mentions memory, recall, what happened last time, save this, forget, sync, or organize memory. Triggers: memory, recall, remember, store memory, forget, sync, 记忆, 翻忆, 查上次, 记下来, 存记忆, 忘掉, 同步, 整理记忆.
 ---
 
-# 睿思记忆 · 操作法
+# respire memory · playbook
 
-CLI 为 `rsrs`（npm 包 `@rsrsai/cli`）。记忆库在本机加密存储，可离线使用；云同步只上传密文。
+The CLI is `rsrs` (npm package `rsrs-cli`; `@rsrsai/cli` is the same CLI). The memory store is encrypted locally and works offline; cloud sync uploads ciphertext only.
 
-## 前置
+## Prerequisites
 
-- 已连接（`rsrs status` 的 `User` 行为 `PASS`）。未连接时先请用户完成连接，不要代为输入密码。
-- 一切命令加 `--json` 取结构化输出；进度写 stderr，**不要 `2>&1`**，否则 JSON 被污染。
+- Connected (the `User` line of `rsrs status` reads `PASS`). If not connected, ask the user to connect first; never enter their password.
+- Every command takes `--json` for structured output; progress goes to stderr — **never `2>&1`**, or the JSON gets polluted.
 
-## 命令
+## Commands
 
-| 目的 | 命令 | 关键参数 |
+| Purpose | Command | Key parameters |
 | --- | --- | --- |
-| 语义召回 | `rsrs recall "<项目名+关键词>" --limit 5 --json` | `--titles` 只要短 id＋标题；`--limit N` 条数 |
-| 落库 | `rsrs remember "<内容>" --title "<事实句>" --importance important --json` | `--parent <id>` 挂到某条之下；`--merge-ids "a,b"` 合并；`--force` 跳过判重 |
-| 读全文 | `rsrs show <短id> --json` | 短 id 取前 8 位 |
-| 因果链 | `rsrs chain <id> --depth 3 --json` | 一次取祖先＋本条＋后代 |
-| 判重候选 | `rsrs candidates "<内容>" --json` | 存前看有没有同题 |
-| 清单 | `rsrs list --limit 10 --json` | `--since <日期>` 收下界 |
-| 改标题 | `rsrs retitle <短id> --title "<新标题>"` | 标题须「主语＋动作＋结果」 |
-| 删除 | `rsrs forget <id> --json` | 墓碑删除，随同步传播；`restore <完整id>` 可复活 |
-| 同步 | `rsrs sync --json` | 平时 autosync 常开，手动才阻塞 |
-| 查态 | `rsrs status --json` | 登录态、条数、索引状态 |
-| 完整工作流 | `rsrs prompt` | 归档规范全文（放置、判级、三段体） |
+| Semantic recall | `rsrs recall "<project name + keywords>" --limit 5 --json` | `--titles` for short id + title only; `--limit N` for count |
+| Store | `rsrs remember "<content>" --title "<fact sentence>" --importance important --json` | `--parent <id>` attaches under a record; `--merge-ids "a,b"` merges; `--force` skips dedup |
+| Read full body | `rsrs show <short-id> --json` | short id = first 8 chars |
+| Causal chain | `rsrs chain <id> --depth 3 --json` | ancestors + record + descendants in one call |
+| Dedup candidates | `rsrs candidates "<content>" --json` | check same-subject records before storing |
+| List | `rsrs list --limit 10 --json` | `--since <date>` lower bound |
+| Retitle | `rsrs retitle <short-id> --title "<new title>"` | title must be "subject + action + result" |
+| Delete | `rsrs forget <id> --json` | tombstone delete, propagated by sync; `restore <full-id>` revives |
+| Sync | `rsrs sync --json` | autosync runs normally; manual sync blocks |
+| Status | `rsrs status --json` | login state, record counts, index state |
+| Full workflow | `rsrs prompt` | the complete archiving policy (placement, grading, three-section body), on demand |
 
-## 常见流程
+## Common flows
 
-1. **答前**：`recall` 换 2–3 组词（同义词、上位词、英文词）；命中后 `show` 读全文再引用。
-2. **落库**：先 `candidates` 判重 → 同题且事实已变用 `rsrs update <id> --content/--title`；同题多散条用 `remember --merge-ids`；确为新事实才 `remember --parent <挂点>`。
-3. **整理**：`rsrs tree --outline --json` 看树 → `rsrs resort --spec '{\"ops\":[{\"id\":\"子\",\"parent\":\"父\"}]}' --go` 批量改挂（默认 dry-run）。
+1. **Before answering**: `recall` with 2–3 different wordings (synonyms, hypernyms, English); on hits, `show` the full body before citing it.
+2. **Storing**: run `candidates` for dedup first → same subject with changed facts, use `rsrs update <id> --content/--title`; multiple scattered same-subject records, use `remember --merge-ids`; only genuinely new facts get `remember --parent <attach-id>`.
+3. **Organizing**: `rsrs tree --outline --json` to view the tree → `rsrs resort --spec '{\"ops\":[{\"id\":\"child\",\"parent\":\"parent\"}]}' --go` to re-attach in bulk (dry-run by default).
 
-## 返回信封
+## Return envelope
 
-所有 `--json` 命令统一返回 `{status, summary, items, details, errors}`：
+All `--json` commands return `{status, summary, items, details, errors}`:
 
-- 失败是 `status:"fail"` ＋ `errors[]`，退出码可能仍为 0——**判 status 不判退出码**。
-- `recall` 的命中在 `details[]`：`score`（相关度，不是可信度）、`id`（全 id）、`title`、`superseded_by`。
-- `remember` 三态：`ok`＝已写入（`summary.id`）；`pending`＋`written:false`＝判为相似**未写入**，须改用 `--parent` 挂靠或 `--force` 直写；其余为失败。
+- Failures are `status:"fail"` plus `errors[]`, and the exit code may still be 0 — **judge by status, not the exit code**.
+- recall hits live in `details[]`: `score` (relevance, not confidence), `id` (full id), `title`, `superseded_by`.
+- remember has three states: `ok` = written (`summary.id`); `pending` plus `written:false` = a similar record was found and **nothing was written** — attach with `--parent` or force with `--force`; anything else is a failure.
 
-## 红线
+## Red lines
 
-- 口令、证件号、手机号、卡号、私钥不得写入记忆正文或查询词，只记存放位置。
-- 删除前确认；`forget` 传播到云端后需 `restore <完整id>` 才能恢复。
-- 不要把召回分数当可信度；引述记忆前先 `show` 看原文。
+- Never put passwords, ID numbers, phone numbers, card numbers, or private keys into memory bodies or query terms; record only where they are stored.
+- Confirm before deleting; once `forget` propagates to the cloud, `restore <full-id>` is required to revive it.
+- Never treat recall scores as confidence; `show` the original text before citing any memory.
