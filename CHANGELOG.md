@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.4.4 — 2026-11-01 · 维护者复审整改（fix/audit-result-contract-stop-failopen 复审 5 项，WB-07~WB-11）
+
+### Fixed
+
+- **WB-07 一次收尾锁重构（复审#1）**：`.store_turn` 单会话状态改为**每会话独立锁文件**（`O_CREAT|O_EXCL` 原子独占——并发 Stop 只有一个能落锁；锁无 TTL，25 小时后仍占用，只有新真实 prompt 删除重新武装；A→B→A 会话交错不丢锁、不互耗）；无法落锁（状态目录不可写等）一律放行——绝不无锁 deny。prompt_ts/store_ts 移入尽力维护的 per-session map（temp+rename 原子替换、仅按数量收敛），map 失败只损失免催优化，不影响一次上限保证。
+- **WB-08 畸形回执归 unknown（复审#2）**：`ok`/`warn` 缺有效 id（hex/uuid 白名单校验，垃圾 id 不当有效）、非 dict summary（类型防护不再外抛）、未知 status 一律 **unknown**（不当失败、不当成功、禁重发）；`skip` = 引擎按模式拒绝（未写非失败）；仅 `fail` 断言「未接受」。
+- **WB-09 共享 hook 预算（复审#3）**：remember/回读/只读核实共用一个截止时间（`RESPITE_HOOK_BUDGET_S`，默认 20s、预留 2.5s 输出余量）；慢坏回执（接近 STORE_T 才回垃圾）剩余预算不足直接 unknown，不再追加 list——unknown 回执不再可能在输出前被宿主杀掉。
+- **WB-10 回读全量核验（复审#4）**：`show` 回读须 **返回 id＝写入 id ＋ 标题相等＋完整正文相等** 才称 verified；相同前缀不同结论尾部、错误 id 均 mismatch 如实标注；畸形 show 返回 unavailable 并保留已写回执。
+- **WB-11 免催只认可归属凭证（复审#5）**：移除「全库最新写入时间晚于本轮 prompt 即免催」（引擎时间戳无法归属会话，B 会话写入会误免催 A）；**Stop 完全不再查询引擎**（也因此不存在查库失败强迫续跑的路径）；`/nomem` 仍算新请求（mark 提前到跳召回判断之前），重新武装收尾锁、只跳召回。
+
+### Changed
+
+- 测试：CI 24 → 29（+A→B→A 交错、无 TTL 老锁、状态不可写放行、Stop 零引擎查询、缺 id/垃圾 id/坏 summary 回执、错 id/尾部篡改回读、慢坏回执+紧预算零追加调用）；bash 67/0 → 72/0（轮次状态目录改 `cygpath -m` 混合路径、`PROMPT_VAL` 豁免 MSYS 环境转换、+25 小时锁仍占用、/nomem 重武装、不可写目录放行、Stop 零引擎调用断言）；版本三方同步 0.4.4。
+
 ## 0.4.3 — 审计整改：写结果状态机＋Stop fail-open＋请求级免催凭证（WB-01~WB-06）
 
 ### Fixed

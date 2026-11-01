@@ -3,6 +3,7 @@
 # 双轨：①桩引擎（STUB_RSRS，canned JSON，不碰真库）跑全分支；②真机 rsrs 只读分支（未装则跳过）。
 # 写库探针须显式 --store（写真库→回执断言→rsrs forget 自清理），缺省绝不写。
 set -u
+export MSYS2_ENV_CONV_EXCL='PROMPT_VAL'  # MSYS 连 env 值都会把「/nomem …」转成 Windows 路径——只豁免 prompt 变量
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 REPO_ROOT="$(cd "$ROOT/../.." && pwd)"
 PY3="$(command -v python3)"
@@ -16,6 +17,8 @@ WITH_STORE=0
 [ "${1:-}" = "--store" ] && WITH_STORE=1
 
 TMP="$(mktemp -d)"; trap 'rm -rf "$TMP"' EXIT
+# 轮次状态目录（每会话锁文件＋凭证 map）：Windows python 看不见 MSYS 路径，必须 cygpath -m 混合路径
+TURNBASE="$(cygpath -m "$TMP" 2>/dev/null || printf '%s' "$TMP")/turnstate"
 CFG_ON="$TMP/config-on.json"
 echo '{"session_rules": true, "store_nudge_every": 0}' > "$CFG_ON"
 CFG_OFF="$TMP/config-off.json"
@@ -41,7 +44,7 @@ if calls:  # 每次被调追加一行：供「疑似凭据不发引擎」断言�
             f.write(sub + "\n")
     except Exception:
         pass
-if sub == "list":  # Stop 侧 engine_last_store 用：recent=近 10 分钟有落库 / stale=只有陈旧条 / 其余=失败
+if sub == "list":  # recent=动态毫秒新鲜条 / stale=只有陈旧条 / 其余=失败。Stop 已不查引擎，仅 unknown 回执只读核实用
     if mode == "recent":
         now = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%S") + ".%03dZ" % (datetime.datetime.now(datetime.timezone.utc).microsecond // 1000)
         print(json.dumps({"status": "ok", "summary": {}, "details": [
@@ -110,13 +113,13 @@ WRAP
   STUB="$TMP/rsrs-stub.cmd"
 fi
 
-# run <event> [prompt] [config] [mode] [engine] [logfile] [stop_hook_active]
-# config 只写非 rsrs 项（rsrs 路径由桩注入）；prompt 走 PROMPT_VAL env——MSYS 会把「/nomem …」argv
-# 转成 Windows 路径，env 值不转；turn 状态文件独立，供 Stop 场景复位。
+# run <event> [prompt] [config] [mode] [engine] [logfile] [stop_hook_active] [turnstate]
+# config 只写非 rsrs 项（rsrs 路径由桩注入）；prompt 走 PROMPT_VAL env（顶部已设 MSYS2_ENV_CONV_EXCL
+# 豁免——argv 与 env 值都会被 MSYS 转成 Windows 路径）；turn 状态目录独立，供 Stop 场景复位。
 run() {
-  local ev="$1" pr="${2-}" cfg="${3:-$CFG_ON}" mode="${4:-ok}" eng="${5:-$STUB}" log="${6:-$TMP/hook.log}" sha="${7:-false}"
+  local ev="$1" pr="${2-}" cfg="${3:-$CFG_ON}" mode="${4:-ok}" eng="${5:-$STUB}" log="${6:-$TMP/hook.log}" sha="${7:-false}" tb="${8:-$TURNBASE}"
   "$PY3" -c "import json,sys; d=json.load(open(sys.argv[1],encoding='utf-8')); d['rsrs']=sys.argv[2]; json.dump(d, open(sys.argv[3],'w',encoding='utf-8'))" "$cfg" "$eng" "$TMP/cfg-live.json"
-  PROMPT_VAL="$pr" "$PY3" - "$ev" "$sha" <<'PY' | PROMPT_VAL="$pr" RESPITE_CONFIG="$TMP/cfg-live.json" RESPITE_LOG="$log"     RESPITE_NUDGE_STATE="$TMP/nudge" RESPITE_TURN_STATE="$TMP/turn.json" STUB_MODE="$mode" STUB_CALL_LOG="$TMP/stub-calls.log" "$PY3" "$ROOT/hooks/respire.py" "$ev"
+  PROMPT_VAL="$pr" "$PY3" - "$ev" "$sha" <<'PY' | PROMPT_VAL="$pr" RESPITE_CONFIG="$TMP/cfg-live.json" RESPITE_LOG="$log"     RESPITE_NUDGE_STATE="$TMP/nudge" RESPITE_TURN_STATE="$tb" STUB_MODE="$mode" STUB_CALL_LOG="$TMP/stub-calls.log" "$PY3" "$ROOT/hooks/respire.py" "$ev"
 import json, os, sys
 ev, sha = sys.argv[1], sys.argv[2]
 pr = os.environ.get("PROMPT_VAL", "")
@@ -128,7 +131,7 @@ if ev == "Stop":
 sys.stdout.write(json.dumps(d, ensure_ascii=False))
 PY
 }
-rst() { rm -f "$TMP/turn.json" "$TMP/nudge"; }   # Stop 场景复位：轮次状态＋节流计数（一次收尾锁会跨调用生效）
+rst() { rm -rf "$TMP/turnstate" "$TMP/nudge"; }   # Stop 场景复位：轮次状态目录（每会话锁＋凭证 map）＋节流计数
 
 
 check() {   # check <名字> <实际输出> <模式: 非空|空|含:xxx|不含:xxx|json:permissionDecision=deny>
@@ -193,30 +196,47 @@ check "凭据轮引擎桩全程未调用" "$( [ "$(calls_n)" = "$N0" ] && echo S
 check "普通路径照常召回不回归" "$(run UserPromptSubmit "普通问题照常召回注入" "$CFG_ON" ok "$STUB" "$SECRET_LOG")" "含:桩召回命中条一"
 check "普通路径引擎桩被调用" "$( [ "$(calls_n)" != "$N0" ] && echo CALLED || echo SAME )" "含:CALLED"
 check "疑似凭据不落库" "$(run UserPromptSubmit "记：数据库密码 = hunter2u")" "含:contains a credential"
+# ---- Stop 分支覆盖（复审新契约：每会话原子一次收尾锁 / 免催只认可归属凭证 / 不查引擎；每场景 rst 复位） ----
+CFG_STOP0="$TMP/config-stop0.json"
+echo '{"session_rules": false, "store_nudge_every": 0}' > "$CFG_STOP0"
 rst; OUT_STOP="$(run Stop "" "$CFG_STOP" stale "$STUB" "$TMP/stop1.log")"
 check "Stop 存储检查拒答续跑" "$OUT_STOP" "json:permissionDecision=deny"
 check "Stop 反馈带存库指令" "$OUT_STOP" "含:rsrs remember"
 check "hooks.json 注册 Stop" "$(cat "$ROOT/hooks/hooks.json")" "含:\"Stop\""
 check "hooks.json 三事件带 py -3 回退" "$( [ "$(grep -c '|| py -3 ' "$ROOT/hooks/hooks.json")" = "3" ] && echo THREE || echo OTHER )" "含:THREE"
-# ---- Stop 分支覆盖（审计新契约：fail-open / 请求级凭证 / 一次收尾锁；每场景 rst 复位） ----
-CFG_STOP0="$TMP/config-stop0.json"
-echo '{"session_rules": false, "store_nudge_every": 0}' > "$CFG_STOP0"
 rst; check "Stop 防重入续跑轮放行" "$(run Stop "" "$CFG_STOP" ok "$STUB" "$TMP/stop-active.log" true)" "空"
 rst; check "Stop 节流关闭静默" "$(run Stop "" "$CFG_STOP0" ok "$STUB" "$TMP/stop-off.log")" "空"
 rst; run UserPromptSubmit "turn that will store via engine" "$CFG_STOP" ok "$STUB" "$TMP/stop-recent.log" >/dev/null
-check "引擎写入晚于本轮prompt免催" "$(run Stop "" "$CFG_STOP" recent "$STUB" "$TMP/stop-recent.log")" "空"
-rst; check "无请求凭证时引擎近期写入仍催(不跨轮误抑制)" "$(run Stop "" "$CFG_STOP" recent "$STUB" "$TMP/stop-recent2.log")" "json:permissionDecision=deny"
+check "引擎侧写入不再免催(去无归属抑制)" "$(run Stop "" "$CFG_STOP" recent "$STUB" "$TMP/stop-recent.log")" "json:permissionDecision=deny"
+rst; check "无请求凭证时仍催(免催只认本层回执)" "$(run Stop "" "$CFG_STOP" recent "$STUB" "$TMP/stop-recent2.log")" "json:permissionDecision=deny"
 rst; run UserPromptSubmit "turn with stale engine only" "$CFG_STOP" ok "$STUB" "$TMP/stop-stale.log" >/dev/null
 check "Stop 引擎陈旧落库仍催" "$(run Stop "" "$CFG_STOP" stale "$STUB" "$TMP/stop-stale.log")" "json:permissionDecision=deny"
-rst; check "Stop 查询失败fail-open放行(旧代码会催)" "$(run Stop "" "$CFG_STOP" fail "$STUB" "$TMP/stop-listfail.log")" "空"
+rst; check "查库坏信封不再影响Stop(不查引擎)" "$(run Stop "" "$CFG_STOP" fail "$STUB" "$TMP/stop-listfail.log")" "json:permissionDecision=deny"
+rst; NCALL0="$(calls_n)"
+run Stop "" "$CFG_STOP" ok "$STUB" "$TMP/stop-nocall.log" >/dev/null
+check "Stop 不再发起引擎查询" "$( [ "$(calls_n)" = "$NCALL0" ] && echo SAME || echo CALLED )" "含:SAME"
 rst; run Stop "" "$CFG_STOP" stale "$STUB" "$TMP/stop-latch.log" >/dev/null
 check "同请求二次Stop一次收尾锁放行(宿主未带active)" "$(run Stop "" "$CFG_STOP" stale "$STUB" "$TMP/stop-latch.log")" "空"
+check "一次收尾锁留痕(once_latch_skip)" "$(grep -q 'once_latch_skip' "$TMP/stop-latch.log" && echo YES)" "含:YES"
 rst; run UserPromptSubmit "记：receipt suppression fact sentence。" "$CFG_STOP" ok "$STUB" "$TMP/stop-stored.log" >/dev/null
 check "记：成功后本轮凭证免催(取代旧hook.log窗口)" "$(run Stop "" "$CFG_STOP" ok "$STUB" "$TMP/stop-stored.log")" "空"
 run UserPromptSubmit "next turn after stored receipt" "$CFG_STOP" ok "$STUB" "$TMP/stop-stored.log" >/dev/null
 check "下一轮不被上一轮成功写误抑制(应催)" "$(run Stop "" "$CFG_STOP" stale "$STUB" "$TMP/stop-stored.log")" "json:permissionDecision=deny"
 rst; run UserPromptSubmit "re-arm after wrap-up" "$CFG_STOP" ok "$STUB" "$TMP/stop-rearm.log" >/dev/null
 check "新请求重新武装仍催" "$(run Stop "" "$CFG_STOP" stale "$STUB" "$TMP/stop-rearm.log")" "json:permissionDecision=deny"
+# 锁不设 TTL：25 小时前的锁仍占用，只有新 prompt 重新武装
+rst; run Stop "" "$CFG_STOP" stale "$STUB" "$TMP/stop-aged.log" >/dev/null
+OLDLATCH="$(ls "$TMP"/turnstate/.latch_* 2>/dev/null | head -1)"
+[ -n "$OLDLATCH" ] && printf '{"ts": 100}' > "$OLDLATCH"
+check "25小时前的锁仍占用(无TTL)" "$( [ -n "$OLDLATCH" ] && [ -z "$(run Stop "" "$CFG_STOP" stale "$STUB" "$TMP/stop-aged.log")" ] && echo HELD || echo LOST )" "含:HELD"
+# /nomem 只跳召回，仍是新请求（重新武装收尾锁）
+rst; run Stop "" "$CFG_STOP" stale "$STUB" "$TMP/stop-nomem.log" >/dev/null
+run UserPromptSubmit "/nomem skip recall only" "$CFG_STOP" ok "$STUB" "$TMP/stop-nomem.log" >/dev/null
+check "/nomem 轮重新武装收尾锁(应催)" "$(run Stop "" "$CFG_STOP" stale "$STUB" "$TMP/stop-nomem.log")" "json:permissionDecision=deny"
+# 状态目录不可写（被同名文件挡住；cygpath 转不动含文件组件的路径，先转 $TMP 再拼）→ 无法落锁 → 放行
+rm -rf "$TMP/not-a-dir"; printf 'x' > "$TMP/not-a-dir"
+rst; check "状态目录不可写放行(绝不无锁deny)" "$(run Stop "" "$CFG_STOP" ok "$STUB" "$TMP/stop-nostate.log" false "$(cygpath -m "$TMP" 2>/dev/null || printf '%s' "$TMP")/not-a-dir/sub")" "空"
+rm -f "$TMP/not-a-dir"
 # ---- 写回执状态机（§7.1/§7.2 契约） ----
 check "warn 已写入不误报失败" "$(run UserPromptSubmit "记：warn receipt fact sentence。" "$CFG_ON" warn)" "含:Saved with warnings"
 check "warn 回执附引擎警告摘要" "$(run UserPromptSubmit "记：warn receipt fact sentence。" "$CFG_ON" warn)" "含:parent (cause) cannot be resolved"
