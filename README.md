@@ -95,8 +95,8 @@ python3 connector/install_local.py --uninstall  # 卸（保留市场注册）
 | --- | --- |
 | `SessionStart` | 注入记忆层简则（何时翻忆、如何落库、红线），对整会话生效；**一次探测三态**——未登录附注册引导（rsrs.rs 注册、`rsrs register` 首设备、`rsrs login --oauth --no-open` 代开授权链接）、库空（<10 条）附首日存料与导入引导、缺语义模型附**可选**装法；常态零打扰 |
 | `UserPromptSubmit` | 自动 `rsrs recall --titles`：**标题档注入**——只给分数＋8 位短 id＋标题，正文由 agent `rsrs show <id>` 按需取（附因果链）；默认**直出不过滤**，噪音边界＝rsrs skip 门＋limit 5＋标题档 |
-| `prompt` 以「记：」「存：」「remember:」开头 | 直接 `rsrs remember … --importance important` 落库并回执；判后即存判为相似时**不写入**、回执转述候选（`--parent` 挂靠或 `--force` 直写），由模型决断；回执硬约束 AI 抽「主语＋动作＋结果」事实句 `retitle` 替换暂拟题 |
-| `Stop`（AI 干完活） | **默认注册**（0.4.1 恢复），存储检查续跑一轮催存；`store_nudge_every` 节流——默认 1=每轮检查，设 0 关闭、设 N 每 N 轮一次。防误催三道：`stop_hook_active=true` 放行；近 10 分钟本层已落库不催；近 10 分钟引擎侧有落库（agent 直接 `rsrs remember` 也算）同样不催 |
+| `prompt` 以「记：」「存：」「remember:」开头 | 直接 `rsrs remember … --importance important` 落库并回执，**回执按结果状态机**：`ok`/`warn` → **已写入**（warn 附引擎警告如 parent 未解析——不误报失败、不引导重发），随后 `show` 写后回读核验（verified / mismatch / unavailable 如实标注）；`pending` → **未写入**，转述候选（带短 id）＋引擎建议动作（改＞并＞挂＞存全量转达，先 `show` 读候选正文再决断）；超时/坏回执 → **结果未知**，回执只允许只读核实（`rsrs list`/`rsrs show`）并**明令禁止重发**（重复写风险）。回执硬约束 AI 抽「主语＋动作＋结果」事实句 `retitle` 替换暂拟题 |
+| `Stop`（AI 干完活） | **默认注册**，存储检查续跑一轮催存；`store_nudge_every` 节流（1=每轮，0=关，N=每 N 轮）。**每个真实请求至多催一次**：`stop_hook_active=true` 放行 ＋ 本层请求级一次收尾锁双保险（新 prompt 重新武装）。**免催凭证按请求判断**：同会话、本轮 prompt 之后的成功写回执（`ok`/`warn`+id）或引擎侧写入（`list` 最近 `updated_at` 晚于本轮 prompt）才免催——旧「近 10 分钟任意写入」跨轮误抑制已移除；缺凭证时宁可多一轮有界收尾。**查库失败/超时/坏信封一律 fail-open 放行**：记忆层故障不得拦主任务结束 |
 | `prompt` 以 `/nomem` 开头 | 本轮跳过召回 |
 | `skills/respire` | 按需加载的操作法（recall/remember/show/forget/sync 与信封解析要点）；**注意技能只是说明书，动作全由钩子驱动** |
 

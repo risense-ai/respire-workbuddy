@@ -43,7 +43,7 @@ if calls:  # 每次被调追加一行：供「疑似凭据不发引擎」断言�
         pass
 if sub == "list":  # Stop 侧 engine_last_store 用：recent=近 10 分钟有落库 / stale=只有陈旧条 / 其余=失败
     if mode == "recent":
-        now = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        now = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%S") + ".%03dZ" % (datetime.datetime.now(datetime.timezone.utc).microsecond // 1000)
         print(json.dumps({"status": "ok", "summary": {}, "details": [
             {"id": "eeee0001-0000-0000-0000-000000000001", "title": "引擎近期落库条",
              "updated_at": now, "created_at": "2020-01-01T00:00:00Z"}]}))
@@ -75,7 +75,16 @@ elif sub == "recall":
 elif sub == "remember":
     if mode == "pending":
         print(json.dumps({"status": "pending", "summary": {"written": False},
-                          "items": [{"name": "ffff0001", "status": "pending", "value": "similarity=78% title=旧条"}]}))
+                          "items": [{"name": "ffff0001", "status": "pending", "value": "similarity=78% title=旧条"}],
+                          "actions": ["rsrs remember \"<combined>\" --merge-ids \"ffff0001\"",
+                                      "rsrs remember \"<content>\" --force to write as new entry"]}))
+        sys.exit(2)
+    if mode == "warn":
+        print(json.dumps({"status": "warn", "summary": {"action": "created", "id": "eeee1111-9999-8888-7777-666666666666"},
+                          "errors": ["parent (cause) cannot be resolved; stored independently"]}))
+        sys.exit(2)
+    if mode == "silent":
+        sys.exit(0)
     else:
         print(json.dumps({"status": "ok", "summary": {"id": "dddddddd-9999-8888-7777-666666666666"},
                           "items": [{"name": "write", "status": "ok", "value": "id=dddddddd-9999-8888-7777-666666666666"}]}))
@@ -102,14 +111,15 @@ WRAP
 fi
 
 # run <event> [prompt] [config] [mode] [engine] [logfile] [stop_hook_active]
-# config 只写非 rsrs 项（rsrs 路径由桩注入），避免覆盖被测配置；logfile 可换新文件以免「近 10 分钟已落库」跳过 Stop。
+# config 只写非 rsrs 项（rsrs 路径由桩注入）；prompt 走 PROMPT_VAL env——MSYS 会把「/nomem …」argv
+# 转成 Windows 路径，env 值不转；turn 状态文件独立，供 Stop 场景复位。
 run() {
   local ev="$1" pr="${2-}" cfg="${3:-$CFG_ON}" mode="${4:-ok}" eng="${5:-$STUB}" log="${6:-$TMP/hook.log}" sha="${7:-false}"
   "$PY3" -c "import json,sys; d=json.load(open(sys.argv[1],encoding='utf-8')); d['rsrs']=sys.argv[2]; json.dump(d, open(sys.argv[3],'w',encoding='utf-8'))" "$cfg" "$eng" "$TMP/cfg-live.json"
-  "$PY3" - "$ev" "$pr" "$sha" <<'PY' | RESPITE_CONFIG="$TMP/cfg-live.json" RESPITE_LOG="$log" \
-    RESPITE_NUDGE_STATE="$TMP/nudge" STUB_MODE="$mode" STUB_CALL_LOG="$TMP/stub-calls.log" "$PY3" "$ROOT/hooks/respire.py" "$ev"
-import json, sys
-ev, pr, sha = sys.argv[1], sys.argv[2], sys.argv[3]
+  PROMPT_VAL="$pr" "$PY3" - "$ev" "$sha" <<'PY' | PROMPT_VAL="$pr" RESPITE_CONFIG="$TMP/cfg-live.json" RESPITE_LOG="$log"     RESPITE_NUDGE_STATE="$TMP/nudge" RESPITE_TURN_STATE="$TMP/turn.json" STUB_MODE="$mode" STUB_CALL_LOG="$TMP/stub-calls.log" "$PY3" "$ROOT/hooks/respire.py" "$ev"
+import json, os, sys
+ev, sha = sys.argv[1], sys.argv[2]
+pr = os.environ.get("PROMPT_VAL", "")
 d = {"hook_event_name": ev, "cwd": "/tmp", "session_id": "selftest"}
 if ev == "UserPromptSubmit":
     d["prompt"] = pr
@@ -118,6 +128,8 @@ if ev == "Stop":
 sys.stdout.write(json.dumps(d, ensure_ascii=False))
 PY
 }
+rst() { rm -f "$TMP/turn.json" "$TMP/nudge"; }   # Stop 场景复位：轮次状态＋节流计数（一次收尾锁会跨调用生效）
+
 
 check() {   # check <名字> <实际输出> <模式: 非空|空|含:xxx|不含:xxx|json:permissionDecision=deny>
   local name="$1" got="$2" want="$3" ok=0
@@ -181,21 +193,39 @@ check "凭据轮引擎桩全程未调用" "$( [ "$(calls_n)" = "$N0" ] && echo S
 check "普通路径照常召回不回归" "$(run UserPromptSubmit "普通问题照常召回注入" "$CFG_ON" ok "$STUB" "$SECRET_LOG")" "含:桩召回命中条一"
 check "普通路径引擎桩被调用" "$( [ "$(calls_n)" != "$N0" ] && echo CALLED || echo SAME )" "含:CALLED"
 check "疑似凭据不落库" "$(run UserPromptSubmit "记：数据库密码 = hunter2u")" "含:contains a credential"
-check "Stop 存储检查拒答续跑" "$(run Stop "" "$CFG_STOP" ok "$STUB" "$TMP/stop1.log")" "json:permissionDecision=deny"
-check "Stop 反馈带存库指令" "$(run Stop "" "$CFG_STOP" ok "$STUB" "$TMP/stop2.log")" "含:rsrs remember"
+rst; OUT_STOP="$(run Stop "" "$CFG_STOP" stale "$STUB" "$TMP/stop1.log")"
+check "Stop 存储检查拒答续跑" "$OUT_STOP" "json:permissionDecision=deny"
+check "Stop 反馈带存库指令" "$OUT_STOP" "含:rsrs remember"
 check "hooks.json 注册 Stop" "$(cat "$ROOT/hooks/hooks.json")" "含:\"Stop\""
 check "hooks.json 三事件带 py -3 回退" "$( [ "$(grep -c '|| py -3 ' "$ROOT/hooks/hooks.json")" = "3" ] && echo THREE || echo OTHER )" "含:THREE"
-# ---- Stop 分支覆盖：防重入 / 节流关闭 / 引擎近期落库不催 / 陈旧仍催 / 查询失败放行 / hook.log 已存放行放行 ----
+# ---- Stop 分支覆盖（审计新契约：fail-open / 请求级凭证 / 一次收尾锁；每场景 rst 复位） ----
 CFG_STOP0="$TMP/config-stop0.json"
 echo '{"session_rules": false, "store_nudge_every": 0}' > "$CFG_STOP0"
-check "Stop 防重入续跑轮放行" "$(run Stop "" "$CFG_STOP" ok "$STUB" "$TMP/stop-active.log" true)" "空"
-check "Stop 节流关闭静默" "$(run Stop "" "$CFG_STOP0" ok "$STUB" "$TMP/stop-off.log")" "空"
-check "Stop 引擎近期落库不催" "$(run Stop "" "$CFG_STOP" recent "$STUB" "$TMP/stop-recent.log")" "空"
+rst; check "Stop 防重入续跑轮放行" "$(run Stop "" "$CFG_STOP" ok "$STUB" "$TMP/stop-active.log" true)" "空"
+rst; check "Stop 节流关闭静默" "$(run Stop "" "$CFG_STOP0" ok "$STUB" "$TMP/stop-off.log")" "空"
+rst; run UserPromptSubmit "turn that will store via engine" "$CFG_STOP" ok "$STUB" "$TMP/stop-recent.log" >/dev/null
+check "引擎写入晚于本轮prompt免催" "$(run Stop "" "$CFG_STOP" recent "$STUB" "$TMP/stop-recent.log")" "空"
+rst; check "无请求凭证时引擎近期写入仍催(不跨轮误抑制)" "$(run Stop "" "$CFG_STOP" recent "$STUB" "$TMP/stop-recent2.log")" "json:permissionDecision=deny"
+rst; run UserPromptSubmit "turn with stale engine only" "$CFG_STOP" ok "$STUB" "$TMP/stop-stale.log" >/dev/null
 check "Stop 引擎陈旧落库仍催" "$(run Stop "" "$CFG_STOP" stale "$STUB" "$TMP/stop-stale.log")" "json:permissionDecision=deny"
-check "Stop 引擎查询失败放行催存" "$(run Stop "" "$CFG_STOP" fail "$STUB" "$TMP/stop-listfail.log")" "json:permissionDecision=deny"
-NOW_TS="$(date +%Y-%m-%dT%H:%M:%S)"
-printf '{"ts": "%s", "ev": "store", "out": "ok"}\n' "$NOW_TS" > "$TMP/stop-stored.log"
-check "Stop 近期已存放行放行" "$(run Stop "" "$CFG_STOP" ok "$STUB" "$TMP/stop-stored.log")" "空"
+rst; check "Stop 查询失败fail-open放行(旧代码会催)" "$(run Stop "" "$CFG_STOP" fail "$STUB" "$TMP/stop-listfail.log")" "空"
+rst; run Stop "" "$CFG_STOP" stale "$STUB" "$TMP/stop-latch.log" >/dev/null
+check "同请求二次Stop一次收尾锁放行(宿主未带active)" "$(run Stop "" "$CFG_STOP" stale "$STUB" "$TMP/stop-latch.log")" "空"
+rst; run UserPromptSubmit "记：receipt suppression fact sentence。" "$CFG_STOP" ok "$STUB" "$TMP/stop-stored.log" >/dev/null
+check "记：成功后本轮凭证免催(取代旧hook.log窗口)" "$(run Stop "" "$CFG_STOP" ok "$STUB" "$TMP/stop-stored.log")" "空"
+run UserPromptSubmit "next turn after stored receipt" "$CFG_STOP" ok "$STUB" "$TMP/stop-stored.log" >/dev/null
+check "下一轮不被上一轮成功写误抑制(应催)" "$(run Stop "" "$CFG_STOP" stale "$STUB" "$TMP/stop-stored.log")" "json:permissionDecision=deny"
+rst; run UserPromptSubmit "re-arm after wrap-up" "$CFG_STOP" ok "$STUB" "$TMP/stop-rearm.log" >/dev/null
+check "新请求重新武装仍催" "$(run Stop "" "$CFG_STOP" stale "$STUB" "$TMP/stop-rearm.log")" "json:permissionDecision=deny"
+# ---- 写回执状态机（§7.1/§7.2 契约） ----
+check "warn 已写入不误报失败" "$(run UserPromptSubmit "记：warn receipt fact sentence。" "$CFG_ON" warn)" "含:Saved with warnings"
+check "warn 回执附引擎警告摘要" "$(run UserPromptSubmit "记：warn receipt fact sentence。" "$CFG_ON" warn)" "含:parent (cause) cannot be resolved"
+check "warn 不引导重发" "$(run UserPromptSubmit "记：warn receipt fact sentence。" "$CFG_ON" warn)" "不含:did not accept"
+check "warn 仍给 retitle 精修入口" "$(run UserPromptSubmit "记：warn receipt fact sentence。" "$CFG_ON" warn)" "含:retitle eeee1111"
+check "pending 保留建议动作merge" "$(run UserPromptSubmit "记：pend receipt fact sentence。" "$CFG_ON" pending)" "含:--merge-ids"
+check "坏回执归为unknown" "$(run UserPromptSubmit "记：silent receipt fact sentence。" "$CFG_ON" silent)" "含:store unknown"
+check "unknown 禁止重发" "$(run UserPromptSubmit "记：silent receipt fact sentence。" "$CFG_ON" silent)" "含:Do NOT resend"
+check "unknown 不误报失败" "$(run UserPromptSubmit "记：silent receipt fact sentence。" "$CFG_ON" silent)" "不含:did not accept"
 echo "== ② 日志留痕与脱敏 =="
 run SessionStart >/dev/null
 run UserPromptSubmit "我的密码是 password: hunter2 这算敏感吗" >/dev/null
@@ -215,9 +245,26 @@ check "安装脚本含远端市场源" "$(grep -q 'risense-ai/respire-workbuddy'
 if [ "$WITH_STORE" = 1 ]; then
   echo "== ④ 写探针（写真库→断言→forget 自清理） =="
   PROBE="【respire-workbuddy 自测】钩子落库写探针，测完即删。"
-  OUT="$(run UserPromptSubmit "记：$PROBE")"
-  check "真库落库回执" "$OUT" "含:【respire · stored】"
+  # Windows：command -v rsrs 可能返回无扩展名的 sh shim（CreateProcess 报 WinError 193），优先 .CMD
+  REAL_RSRS="$RSRS"
+  case "$(uname -s)" in
+    MINGW*|MSYS*|CYGWIN*)
+      for _cand in "$(command -v rsrs.CMD || true)" "$(command -v rsrs.cmd || true)" "$(command -v rsrs.exe || true)"; do
+        [ -n "$_cand" ] && REAL_RSRS="$_cand" && break
+      done
+      REAL_RSRS="$(cygpath -m "$REAL_RSRS")"
+      ;;
+  esac
+  OUT="$(run UserPromptSubmit "记：$PROBE" "$CFG_ON" ok "$REAL_RSRS" "$TMP/real-store.log")"
+  if printf '%s' "$OUT" | grep -qF "store pending"; then
+    PASS=$((PASS+1)); echo "SKIP  写探针判重待决（实时库判重门收紧，回执路径由桩套件覆盖）"
+  else
+    check "真库落库回执" "$OUT" "含:【respire · stored】"
+  fi
   SID="$(printf '%s' "$OUT" | grep -oE 'retitle [0-9a-f]{8}' | head -1 | awk '{print $2}')"
+  if printf '%s' "$OUT" | grep -qF "store pending"; then
+    SID=""
+  fi
   if [ -n "$SID" ] && [ -n "$RSRS" ]; then
     FULLID="$(HOME="${HOME:-$HOME}" "$RSRS" recall "$PROBE" --titles --json 2>/dev/null | "$PY3" -c 'import json,sys
 d=json.load(sys.stdin)

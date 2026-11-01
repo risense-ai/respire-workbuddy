@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.4.3 — 审计整改：写结果状态机＋Stop fail-open＋请求级免催凭证（WB-01~WB-06）
+
+### Fixed
+
+- **WB-01 Stop fail-open**：查库 `list` 失败/超时/坏信封时直接放行，不再 deny——记忆层故障不得强迫主任务续跑。**同步翻转旧测试错误期望**（`failed→deny` 曾被当正确结果）。
+- **WB-02 未知写结果只读核实**：超时/坏回执/无输出归为 **unknown**——回执明令「`rsrs list`/`rsrs show` 只读核实、禁止重发 remember」（旧文案「手动 rsrs remember 核实」有重复写风险）；秒回坏回执自动 `list` 核对并报告可能已写（附只读 id）。`warn`+有效 id 是**已写入带警告**，如实回执不误报失败。
+- **WB-03 快存回执闭环**：ok/warn 后 `show` 写后回读核验（R11，verified/mismatch/unavailable 如实标注）；pending 保留候选短 id 与引擎建议动作全量（改＞并＞挂＞存，§7.2）。
+- **WB-04 请求级免催凭证**：废除「近 10 分钟任意写入」全局抑制（跨轮误抑制）；改为 `.store_turn`——同会话、本轮 prompt 之后的成功写回执或引擎侧写入才免催。
+- **WB-05 一次收尾锁**：宿主未带 `stop_hook_active` 时同一请求也至多 deny 一次；新 prompt 重新武装。
+
+### Changed
+
+- 测试：CI 桩白名单升级为有序调用序列（remember→show 回读链），spy 支持 warn/pending/silent/hang/show_mismatch；新增 8 个契约测试。bash 套件加 rst 场景复位与状态机/warn/unknown 断言（55/0 → 67/0）；**修复写探针从未写真库的既有 bug**（默认走桩）——现显式传真引擎（Windows 优先 `.CMD` 形式，sh shim 会 WinError 193），实时库判重收紧时优雅 SKIP。
+- `RESPITE_TEST_FAST`/`RESPITE_TURN_STATE` 测试后门；README 行为表同步；`.gitignore` 增 `.store_turn`。
+
+
 ## 0.4.2 — 2026-11-01 · 两份 SKILL.md 英文化
 
 - `plugins/respire/skills/respire/SKILL.md` 与 `connector/skills/respire-memory/SKILL.md` 全文英文化（dimcode 家族结构；connector 保留命令表格）；「记：」前缀与信封解析不变；触发词保留中文供路由
