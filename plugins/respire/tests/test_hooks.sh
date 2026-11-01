@@ -203,7 +203,7 @@ check "凭据轮引擎桩全程未调用" "$( [ "$(calls_n)" = "$N0" ] && echo S
 check "普通路径照常召回不回归" "$(run UserPromptSubmit "普通问题照常召回注入" "$CFG_ON" ok "$STUB" "$SECRET_LOG")" "含:桩召回命中条一"
 check "普通路径引擎桩被调用" "$( [ "$(calls_n)" != "$N0" ] && echo CALLED || echo SAME )" "含:CALLED"
 check "疑似凭据不落库" "$(run UserPromptSubmit "记：数据库密码 = hunter2u")" "含:contains a credential"
-# ---- Stop 分支覆盖（复审新契约：每会话原子一次收尾锁 / 免催只认可归属凭证 / 不查引擎；每场景 rst 复位） ----
+# ---- Stop 分支覆盖（R3 终案契约：每会话原子一次收尾锁 / 磁盘凭证免催已取消 / 不查引擎；每场景 rst 复位） ----
 CFG_STOP0="$TMP/config-stop0.json"
 echo '{"session_rules": false, "store_nudge_every": 0}' > "$CFG_STOP0"
 rst; OUT_STOP="$(run Stop "" "$CFG_STOP" stale "$STUB" "$TMP/stop1.log")"
@@ -215,7 +215,7 @@ rst; check "Stop 防重入续跑轮放行" "$(run Stop "" "$CFG_STOP" ok "$STUB"
 rst; check "Stop 节流关闭静默" "$(run Stop "" "$CFG_STOP0" ok "$STUB" "$TMP/stop-off.log")" "空"
 rst; run UserPromptSubmit "turn that will store via engine" "$CFG_STOP" ok "$STUB" "$TMP/stop-recent.log" >/dev/null
 check "引擎侧写入不再免催(去无归属抑制)" "$(run Stop "" "$CFG_STOP" recent "$STUB" "$TMP/stop-recent.log")" "json:permissionDecision=deny"
-rst; check "无请求凭证时仍催(免催只认本层回执)" "$(run Stop "" "$CFG_STOP" recent "$STUB" "$TMP/stop-recent2.log")" "json:permissionDecision=deny"
+rst; check "无请求凭证时仍催(免催已取消R3)" "$(run Stop "" "$CFG_STOP" recent "$STUB" "$TMP/stop-recent2.log")" "json:permissionDecision=deny"
 rst; run UserPromptSubmit "turn with stale engine only" "$CFG_STOP" ok "$STUB" "$TMP/stop-stale.log" >/dev/null
 check "Stop 引擎陈旧落库仍催" "$(run Stop "" "$CFG_STOP" stale "$STUB" "$TMP/stop-stale.log")" "json:permissionDecision=deny"
 rst; check "查库坏信封不再影响Stop(不查引擎)" "$(run Stop "" "$CFG_STOP" fail "$STUB" "$TMP/stop-listfail.log")" "json:permissionDecision=deny"
@@ -226,7 +226,7 @@ rst; run Stop "" "$CFG_STOP" stale "$STUB" "$TMP/stop-latch.log" >/dev/null
 check "同请求二次Stop一次收尾锁放行(宿主未带active)" "$(run Stop "" "$CFG_STOP" stale "$STUB" "$TMP/stop-latch.log")" "空"
 check "一次收尾锁留痕(once_latch_skip)" "$(grep -q 'once_latch_skip' "$TMP/stop-latch.log" && echo YES)" "含:YES"
 rst; run UserPromptSubmit "记：receipt suppression fact sentence。" "$CFG_STOP" ok "$STUB" "$TMP/stop-stored.log" >/dev/null
-check "记：成功后本轮凭证免催(取代旧hook.log窗口)" "$(run Stop "" "$CFG_STOP" ok "$STUB" "$TMP/stop-stored.log")" "空"
+check "记：成功后Stop仍催(磁盘凭证免催已取消R3)" "$(run Stop "" "$CFG_STOP" ok "$STUB" "$TMP/stop-stored.log")" "json:permissionDecision=deny"
 run UserPromptSubmit "next turn after stored receipt" "$CFG_STOP" ok "$STUB" "$TMP/stop-stored.log" >/dev/null
 check "下一轮不被上一轮成功写误抑制(应催)" "$(run Stop "" "$CFG_STOP" stale "$STUB" "$TMP/stop-stored.log")" "json:permissionDecision=deny"
 rst; run UserPromptSubmit "re-arm after wrap-up" "$CFG_STOP" ok "$STUB" "$TMP/stop-rearm.log" >/dev/null
@@ -249,19 +249,19 @@ NCAP1="$(calls_n)"
 check "序列:内部Recap静默且零引擎调用" "$(run UserPromptSubmit "Host internal recap of the session" "$CFG_STOPSKIP" ok "$STUB" "$TMP/stop-intrecap.log" >/dev/null; [ "$(calls_n)" = "$NCAP1" ] && echo SAME || echo CALLED)" "含:SAME"
 check "序列:内部Recap后Stop不再deny(未重武装)" "$(run Stop "" "$CFG_STOPSKIP" ok "$STUB" "$TMP/stop-intrecap.log")" "空"
 check "序列:内部Recap未删收尾锁(留痕)" "$(grep -q 'once_latch_skip' "$TMP/stop-intrecap.log" && echo YES)" "含:YES"
-# ---- 复审 R2#3：每会话独立状态文件——B 的更新不回滚 A 的免催凭证，共享 turn_map.json 不复存在 ----
+# ---- 复审 R2#3：每会话独立状态文件（R3 终案后仅诊断轨迹，不影响 Stop 决策）——B 的更新不回滚 A 的轨迹文件，共享 turn_map.json 不复存在 ----
 rst; run UserPromptSubmit "记：session A stores a fact sentence。" "$CFG_STOP" ok "$STUB" "$TMP/stop-ab.log" false "$TURNBASE" sessA >/dev/null
-check "A 会话写回执免催 A" "$(run Stop "" "$CFG_STOP" ok "$STUB" "$TMP/stop-ab.log" false "$TURNBASE" sessA)" "空"
+check "A 会话写回执不免催Stop(免催已取消R3)" "$(run Stop "" "$CFG_STOP" ok "$STUB" "$TMP/stop-ab.log" false "$TURNBASE" sessA)" "json:permissionDecision=deny"
 AKEY="$("$PY3" -c 'import hashlib; print(hashlib.sha1(b"respire-turn-v2:sessA").hexdigest()[:16])')"
 cp "$TURNBASE/st_$AKEY.json" "$TMP/a-snapshot.json" 2>/dev/null
 run UserPromptSubmit "session B new unrelated request" "$CFG_STOP" ok "$STUB" "$TMP/stop-ab.log" false "$TURNBASE" sessB >/dev/null
 check "B 新请求未存应催" "$(run Stop "" "$CFG_STOP" ok "$STUB" "$TMP/stop-ab.log" false "$TURNBASE" sessB)" "json:permissionDecision=deny"
 check "屏障:B 写不影响 A 状态文件(独立文件)" "$(cmp -s "$TURNBASE/st_$AKEY.json" "$TMP/a-snapshot.json" && echo SAME || echo CHANGED)" "含:SAME"
-check "A 仍免催(B 未回滚 A 凭证)" "$(run Stop "" "$CFG_STOP" ok "$STUB" "$TMP/stop-ab.log" false "$TURNBASE" sessA)" "空"
+check "A 二次Stop由一次收尾锁放行(免催已取消)" "$(run Stop "" "$CFG_STOP" ok "$STUB" "$TMP/stop-ab.log" false "$TURNBASE" sessA)" "空"
 check "状态按会话独立成文件(共2个)" "$(ls "$TURNBASE" | grep -c '^st_.*\.json$' | tr -d '[:space:]' | grep -qx 2 && echo TWO || echo OTHER)" "含:TWO"
 check "共享 turn_map.json 已移除" "$([ -f "$TURNBASE/turn_map.json" ] && echo PRESENT || echo GONE)" "含:GONE"
 run UserPromptSubmit "session A new request after receipt" "$CFG_STOP" ok "$STUB" "$TMP/stop-ab.log" false "$TURNBASE" sessA >/dev/null
-check "A 新请求后旧回执不免催(请求代绑定,应催)" "$(run Stop "" "$CFG_STOP" ok "$STUB" "$TMP/stop-ab.log" false "$TURNBASE" sessA)" "json:permissionDecision=deny"
+check "A 新请求重新武装仍催(诊断轨迹不影响决策)" "$(run Stop "" "$CFG_STOP" ok "$STUB" "$TMP/stop-ab.log" false "$TURNBASE" sessA)" "json:permissionDecision=deny"
 # 状态目录不可写（被同名文件挡住；cygpath 转不动含文件组件的路径，先转 $TMP 再拼）→ 无法落锁 → 放行
 rm -rf "$TMP/not-a-dir"; printf 'x' > "$TMP/not-a-dir"
 rst; check "状态目录不可写放行(绝不无锁deny)" "$(run Stop "" "$CFG_STOP" ok "$STUB" "$TMP/stop-nostate.log" false "$(cygpath -m "$TMP" 2>/dev/null || printf '%s' "$TMP")/not-a-dir/sub")" "空"

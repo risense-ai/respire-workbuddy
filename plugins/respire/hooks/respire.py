@@ -16,7 +16,7 @@ import subprocess
 import sys
 import time
 
-VERSION = "0.4.5"
+VERSION = "0.4.6"
 
 # 超时窗（秒）：须盖住 rsrs runtime 冷启动（实测 doctor 模型加载 7s+），否则首轮静默、热后即灵
 RECALL_T = 14
@@ -208,15 +208,15 @@ def extract_title(content: str) -> str:
     return head                                       # 无标点长串才落到 70 字上界
 
 
-TURN_FRESH_S = 1800  # 本轮写回执的新鲜度上限：超窗视为陈旧，不再据此免催
-STATE_FILES_MAX = 64  # st_*.json 历史会话收敛上限（按 mtime 留新；只影响免催优化，不碰锁）
+TURN_FRESH_S = 1800  # 历史写回执新鲜度（免催已取消，仅作诊断轨迹参考）
+STATE_FILES_MAX = 64  # st_*.json 历史会话收敛上限（按 mtime 留新；只影响诊断轨迹，不碰锁）
 # 一次收尾锁（复核整改）：每会话独立锁文件，O_CREAT|O_EXCL 原子独占——并发 Stop 只有一个能落锁；
 # 锁不设 TTL：只有可识别的新真实请求（mark_prompt）会删除它重新武装；无法落锁（目录不可写等）
 # 一律放行，绝不在没有锁保护的情况下 block。宿主内部提示（skip_prefixes 命中）在 mark_prompt
-# 之前辨别——不重新武装锁、不记请求代（复审 R2#1：真实请求→Stop deny→内部 Recap→Stop 不得再 deny）。
-# 写回执/请求代存于每会话独立状态文件 st_<sid>.json（temp+rename 原子替换）：各会话各写各的文件，
-# 共享 map 的读-改-写回滚窗口不复存在（复审 R2#3）；回执绑定请求代（store_req_ts==prompt_ts），
-# 旧请求延迟完成的写回执不免催新请求；状态文件失败只损失免催优化，不影响一次上限保证。
+# 之前辨别——不重新武装锁（复审 R2#1：真实请求→Stop deny→内部 Recap→Stop 不得再 deny）。
+# R3 终案（同 zcode/dimcode 复核⑥）：**磁盘凭证免催整体取消**——跨事件没有可靠的「当前请求」
+# 磁盘身份（同会话 RMW 屏障交错可恢复旧请求凭证，失败-恢复窗口无法闭合），防重唯一依据是
+# latch。st_<sid>.json（prompt_ts/store_ts/请求代）保留为尽力维护的诊断轨迹，不影响 Stop 决策。
 
 
 def _turn_dir():
@@ -256,10 +256,9 @@ def _state_load(session: str) -> dict:
 
 def _state_update(session: str, patch: dict) -> bool:
     """合并更新本会话状态文件（temp+rename 原子替换）；失败返回 False，绝不抛。
-    复审 R2#3：文件按会话隔离——B 会话的写只碰 B 的文件，不可能把 A 回滚成旧快照。
-    旧共享 turn_map.json 的确定性交错（B 先读全 map→A 更新 prompt_ts→B 写回旧快照，
-    恢复 A 的旧 store_ts>=prompt_ts 误免催）在此结构下无法构成；同会话内的写入由宿主
-    串行投递（同一会话事件顺序执行），无并发 RMW。"""
+    R3 终案：状态文件只是尽力维护的诊断轨迹（免催已取消，Stop 不读它）——
+    同会话 RMW 交错恢复旧快照在最坏情况下也只影响轨迹准确性，不影响任何决策；
+    状态文件失败零决策影响（latch 由独立锁文件保证）。"""
     p = _state_path(session)
     if not p or not session:
         return False
@@ -328,9 +327,8 @@ def latch_rearm(session: str) -> None:
 
 
 def mark_prompt(session: str) -> float:
-    """可识别的新真实用户请求开始：记录请求代 prompt_ts；删除一次收尾锁（重新武装）。
-    返回请求代 ts——本请求内的写回执（mark_store）必须绑定它：旧请求延迟完成的写
-    带旧代，turn_stored 不认，防污染新请求的免催判定（复审 R2#3）。"""
+    """可识别的新真实用户请求开始：记录请求代 prompt_ts（诊断轨迹）；删除一次收尾锁（重新武装）。
+    R3 终案：免催已取消——请求代不再参与 Stop 判定，仅随状态文件留痕；防重唯一依据是 latch。"""
     ts = time.time()
     _state_update(session, {"prompt_ts": ts})
     _state_prune()
@@ -339,26 +337,19 @@ def mark_prompt(session: str) -> float:
 
 
 def mark_store(session: str, req_ts: float = 0.0):
-    """本层「记：」成功回执（ok/warn + 有效 id）：记录写时刻并绑定请求代，Stop 免催。"""
+    """本层「记：」成功回执（ok/warn + 有效 id）：记录写时刻并绑定请求代。
+    R3 终案：仅作诊断轨迹留痕——turn_stored 恒 False，本凭证不再影响 Stop 决策。"""
     _state_update(session, {"store_ts": time.time(), "store_req_ts": float(req_ts or 0.0)})
 
 
 def turn_stored(session: str) -> bool:
-    """本轮（同会话、同一请求代、prompt 之后、新鲜窗内）已有成功写回执。
-    请求代绑定：store_req_ts 必须等于当前 prompt_ts——旧请求跨新 prompt 完成的写
-    不免催新轮；状态缺失/坏键一律保守 False（宁可多一轮有界收尾，不跨轮误抑制）。"""
-    if not session:
-        return False
-    e = _state_load(session)
-    if not isinstance(e, dict):
-        return False
-    st = e.get("store_ts")
-    pt = e.get("prompt_ts")
-    srt = e.get("store_req_ts")
-    if not (isinstance(st, (int, float)) and isinstance(pt, (int, float))
-            and isinstance(srt, (int, float))):
-        return False
-    return srt == pt and st >= pt and time.time() - st < TURN_FRESH_S
+    """磁盘凭证免催已**取消**（R3 终案，同 zcode/dimcode 复核⑥）：跨事件（UserPromptSubmit→Stop
+    是两个独立 hook 进程）没有可靠的「当前请求」身份可写入磁盘而不依赖任何文件操作成功——
+    同会话 RMW（load→patch→rename）屏障交错可恢复旧请求凭证，unlink/写/锁任一环节的
+    失败-恢复窗口都无法闭合。防重唯一依据回归 **latch 语义**：latch 在 Stop 的 nudge 时
+    O_EXCL 创建、由下一次真实 prompt 删除。本函数恒 False：Stop 不凭任何磁盘旧记录免催；
+    本层「记：」写回执仍诚实输出给模型（告知已存），状态文件保留作诊断轨迹。"""
+    return False
 
 
 def readback(bin_path: str, sid: str, title: str, content: str, cfg: dict, budget_s: float):
@@ -385,11 +376,17 @@ def readback(bin_path: str, sid: str, title: str, content: str, cfg: dict, budge
         log_event(cfg, "readback", "no_entry", "", ms)
         return "unavailable"
     summ = doc.get("summary")
-    rid = str(summ.get("id") or "") if isinstance(summ, dict) else ""
-    if rid != sid:  # 返回的是别的条目：不是本条核验通过
-        log_event(cfg, "readback", "mismatch", f"id={rid[:8]}!={sid[:8]}", ms)
+    rid_raw = summ.get("id") if isinstance(summ, dict) else None
+    eid_raw = entry.get("id")
+    # 三方一致（R3#2）：summary.id、entry.id 都必须原生字符串且 === 目标 id（任一缺失/错/非字符串=mismatch）
+    if not (isinstance(rid_raw, str) and rid_raw == sid and isinstance(eid_raw, str) and eid_raw == sid):
+        log_event(cfg, "readback", "mismatch", "id-triple", ms)
         return "mismatch"
-    et, ec = str(entry.get("title") or ""), str(entry.get("content") or "")
+    et_raw, ec_raw = entry.get("title"), entry.get("content")
+    if not isinstance(et_raw, str) or not isinstance(ec_raw, str):
+        log_event(cfg, "readback", "mismatch", "non-string title/content", ms)
+        return "mismatch"  # 数字/数组/对象正文不强转匹配（42 ≠ "42"）
+    et, ec = et_raw, ec_raw
     bad_title = bool(title) and et != title
     bad_body = content.strip() != ec.strip()  # 完整正文比对（去首尾空白规范化）
     if bad_title or bad_body:
@@ -455,9 +452,11 @@ def do_store(bin_path: str, content: str, cfg: dict, session: str = "", req_ts: 
         doc = {}
     status = str(doc.get("status") or "")
     summ = doc.get("summary")
-    sid = str(summ.get("id") or "") if isinstance(summ, dict) else ""
-    if not re.fullmatch(r"[0-9a-fA-F][0-9a-fA-F-]{7,}", sid):
-        sid = ""  # 缺失/畸形 id 一律按不可确认处理，不当有效也不当失败
+    raw_id = summ.get("id") if isinstance(summ, dict) else None
+    # 严格类型+白名单（R3#2）：id 必须原生字符串（JSON 数字 12345678 不做 str() 强转）；
+    # 语法白名单 = 标准 UUID 或 16+ 位连续 hex（`a-------` 这类宽松 hex-连字符不认）
+    sid = raw_id if isinstance(raw_id, str) and re.fullmatch(
+        r"[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}|[0-9a-f]{16,}", raw_id, re.I) else ""
 
     # —— 已写入：ok / warn（warn 也是已提交，只是带警告）——
     if parse_ok and sid and status in ("ok", "warn"):
@@ -717,12 +716,15 @@ def _last_store_detail(engine, timeout: int = LIST_T):
 def on_stop(data: dict, cfg: dict, engine) -> str:
     """Stop 存储检查：干完活的存储提示（deny 续跑一轮）。
     规范防循环：续跑轮 stdin 带 stop_hook_active=true → 放行。
-    审计整改后的免催/放行契约（WB-01/WB-03/WB-04/WB-05）：
-      - 查库失败/超时/坏信封 → 放行（fail-open：记忆层故障不得拦主任务）
-      - 本轮已有成功写回执（同会话、prompt 之后）→ 放行
-      - 引擎侧写入晚于本轮 prompt（同会话；agent 自行 rsrs remember）→ 放行
-      - 每个真实请求至多 deny 一次（stop_hook_active ＋ 本层一次收尾锁双保险）
-      - 缺会话/轮次凭证时不免催（宁可多一轮有界收尾，不做跨轮误抑制）"""
+    审计整改后的免催/放行契约（WB-01/WB-03/WB-04/WB-05 + R3 终案）：
+      - 每个真实请求至多 deny 一次：stop_hook_active ＋ 每会话原子一次收尾锁（O_EXCL）
+        双保险；无法落锁（含目录不可写）一律放行——绝不无锁 deny
+      - **磁盘凭证免催已取消（R3 终案，同 zcode/dimcode 复核⑥）**：跨事件没有可靠的
+        磁盘「当前请求」身份（同会话 RMW 屏障交错可恢复旧凭证，失败-恢复窗口无法闭合），
+        latch 是唯一的重入判定——本层「记：」成功回执不再抑制本请求的 Stop（诚实输出
+        回执，仍会照常催存收尾；用户确未存新东西时一轮即结束）
+      - Stop 完全不查询引擎：无查库失败强迫续跑路径，也不再用无法归属的全库时间抑制
+      - 无宿主请求标识时同文本重放按新请求处理（保守重武装），由 latch 保证至多催一次"""
     if data.get("stop_hook_active") is True:
         log_event(cfg, "stop", "active_skip")
         return ""
@@ -753,11 +755,9 @@ def on_stop(data: dict, cfg: dict, engine) -> str:
     if not latch_claim(session):
         log_event(cfg, "stop", "once_latch_skip")
         return ""
-    if turn_stored(session):
-        log_event(cfg, "stop", "stored_turn_skip", "src=receipt")
-        return ""
-    # 复核整改：移除「全库最新写入时间晚于本轮 prompt 即免催」——引擎侧写入无法归属到
-    # 本会话/本请求（其他会话并行写入会误抑制）。免催只认可归属凭证：本层成功写回执。
+    # R3 终案：磁盘写回执免催已取消（turn_stored 恒 False，不再调用）——latch 落锁即催，
+    # 防重完全由「锁存在=已催过、新真实 prompt 删锁」保证；引擎侧全库时间戳无法归属到
+    # 会话/请求，也从未用作免催。Stop 不发任何引擎调用。
     log_event(cfg, "stop", "nudge")
     return json.dumps({
         "hookSpecificOutput": {

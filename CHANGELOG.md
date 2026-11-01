@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.4.6 — 2026-11-01 · 第三轮复审整改（PR #5 复审三项 P2，移植 zcode/dimcode 已合并终案）
+
+### Changed
+
+- **R3#1 取消磁盘凭证免催（终案，同 zcode 0.1.9 / dimcode 0.5.14 复核⑥）**：同会话 `_state_update`（load→patch→rename）无锁 RMW 可被两进程屏障交错恢复旧请求凭证（复审已复现：新 prompt_ts 被旧快照回滚、旧代 store_req_ts 重新生效、turn_stored=True 误免催）——跨事件（UserPromptSubmit→Stop 是两个独立 hook 进程）不存在可靠的「当前请求」磁盘身份，失败-恢复窗口无法闭合。按终案**取消免催优化**：`turn_stored` 恒 `False`，`on_stop` 删除该调用分支（latch 落锁即催）——防重唯一依据回归 latch 语义（nudge 时 `O_EXCL` 创建、下一次真实 prompt 删除）。「记：」写回执仍诚实输出给模型（告知已存）；`st_<sid>.json` 状态文件保留为诊断轨迹，不再影响 Stop 决策。
+- **R3#2 畸形 ID／回读类型严格化**：写回执 id 必须**原生字符串**（JSON 数字 12345678 不做 `str()` 强转）且匹配**标准 UUID 或 16+ 位连续 hex** 白名单（`a-------` 这类宽松 hex-连字符不算）——否则按不可确认归 unknown（不 Saved、不引导重发）。`show` 回读改**三方 id 一致**：summary.id 与 entry.id 均须原生字符串且 === 写入 id（entry.id 错/缺失 → mismatch，不再只核 summary.id）；title/content 须 `isinstance(str)` 后再比对（数字 42 ≠ "42"，不做强转）——类型异常归 mismatch，已写的 Saved 回执保留、绝不冒充 verified。
+- **R3#3 重放边界（README 注明）**：WorkBuddy 事件流不带宿主请求/事件标识，无法区分同事件重投与用户再次发送同文本——保守按新请求处理（重新武装收尾锁），由「每请求至多催一次」的一次收尾锁兜底；不以内容哈希吞掉正常的重复提问。README Stop 行同步（免催不依赖磁盘凭证＋重放边界说明），UserPromptSubmit 行同步 id 白名单与三方 id 回读口径。
+- 测试：CI 35 → 36（+畸形 ID 反例：数字 id／`a-------` → unknown 不 Saved；回读反例：entry.id 错（复审点名的 DIFFERENT 路径）／缺失／数字 content → mismatch 且 Saved 保留；store 后 Stop 仍催、同请求二次 Stop 由 latch 放行；TurnStateFiles 全组翻转为恒 False 并补诊断轨迹存在性断言；Stop 期望 argv 序列改空——launcher 放宽空序列断言，Stop 期间任何 subprocess 即拒绝）；bash 87/0 保持（「记：成功后免催」翻转为仍催 deny，A/B 会话段同步 latch 语义命名，屏障与独立文件断言保留）；版本三方同步 0.4.6。
+
 ## 0.4.5 — 2026-11-01 · 复审第二轮整改（PR #5 复审三项 P2）
 
 ### Fixed

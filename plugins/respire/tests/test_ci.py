@@ -41,7 +41,7 @@ import json, os, pathlib, runpy, sys
 case = pathlib.Path(os.environ['RESPITE_CONFIG']).resolve().parent
 expected = os.environ['TEST_ENGINE']
 expected_argv = json.loads(os.environ['TEST_EXPECTED_ARGV'])
-assert isinstance(expected_argv, list) and expected_argv
+assert isinstance(expected_argv, list)  # 空序列=零引擎调用（R3 终案：Stop 不查引擎，任何 subprocess 即拒绝）
 for argv in expected_argv:
     assert isinstance(argv, list) and argv[0] == expected
 config = json.loads(pathlib.Path(os.environ['RESPITE_CONFIG']).read_text(encoding="utf-8"))
@@ -109,6 +109,9 @@ elif sub == 'remember':
     if mode == 'silent': sys.exit(0)
     if mode == 'ok_noid': print(json.dumps({'status':'ok','summary':{'action':'created'}})); sys.exit(0)
     if mode == 'ok_junkid': print(json.dumps({'status':'ok','summary':{'id':'zz!!not-hex'}})); sys.exit(0)
+    # R3#2 反例：数字 id（JSON number，不得 str() 强转）与宽松 hex-连字符——都不是有效 id
+    if mode == 'ok_numid': print(json.dumps({'status':'ok','summary':{'id':12345678}})); sys.exit(0)
+    if mode == 'ok_dashid': print(json.dumps({'status':'ok','summary':{'id':'a-------'}})); sys.exit(0)
     if mode == 'bad_summary': print(json.dumps({'status':'ok','summary':'boom'})); sys.exit(0)
     if mode == 'skip_status': print(json.dumps({'status':'skip','summary':{}})); sys.exit(0)
     if mode == 'slow_garbage': time.sleep(2.5); print('garbage not json'); sys.exit(0)
@@ -138,6 +141,21 @@ elif sub == 'show':
     if mode == 'show_wrongid':
         print(json.dumps({'status':'ok','summary':{'id':'99999999-9999-4999-8999-999999999999','title':title},
                           'details':{'entry':{'id':'99999999-9999-4999-8999-999999999999','title':title,'content':content}}}))
+        sys.exit(0)
+    # R3#2 反例：summary.id 正确但 entry.id='DIFFERENT'（复审点名的回读伪装路径）→ mismatch
+    if mode == 'show_entrydiff':
+        print(json.dumps({'status':'ok','summary':{'id':sys.argv[2],'title':title},
+                          'details':{'entry':{'id':'DIFFERENT','title':title,'content':content}}}))
+        sys.exit(0)
+    # R3#2 反例：entry.id 缺失（三方 id 不齐）→ mismatch，不得 verified
+    if mode == 'show_noentryid':
+        print(json.dumps({'status':'ok','summary':{'id':sys.argv[2],'title':title},
+                          'details':{'entry':{'title':title,'content':content}}}))
+        sys.exit(0)
+    # R3#2 反例：content 为数字 42（输入正文是字符串 "12345678"）——42 ≠ "42"，不强转匹配
+    if mode == 'show_numcontent':
+        print(json.dumps({'status':'ok','summary':{'id':sys.argv[2],'title':title},
+                          'details':{'entry':{'id':sys.argv[2],'title':title,'content':42}}}))
         sys.exit(0)
     if mode == 'show_tail' and content:
         content = content[:40] + 'TAMPERED-TAIL'
@@ -188,18 +206,19 @@ else: sys.exit(1)
             config['skip_prefixes'] = skip
         self.config.write_text(json.dumps(config), encoding="utf-8")
         if event == 'Stop':
-            args_seq = [['list','--limit','3','--json']]
+            args_seq = []  # R3 终案：Stop 完全不查引擎（空序列=零调用，任何 subprocess 即拒绝）
         elif event == 'SessionStart':
             args_seq = [['status','--json']]
         elif prompt.startswith(('记：','store:')):
             content = prompt.replace('：',':',1).split(':',1)[1].strip()
             argv = ['remember',content,'--title',content,'--importance','important','--json']
             if mode in ('ok','show_fail','show_mismatch','show_wrongid','show_tail',
-                        'show_badetails','show_strdetails'):
+                        'show_badetails','show_strdetails',
+                        'show_entrydiff','show_noentryid','show_numcontent'):
                 args_seq = [argv, ['show','dddddddddddddddd','--json']]
             elif mode == 'warn':
                 args_seq = [argv, ['show','eeeeeeeeeeeeeeee','--json']]
-            elif mode in ('silent','ok_noid','ok_junkid','bad_summary'):  # 未知回执 → 只读核实 list
+            elif mode in ('silent','ok_noid','ok_junkid','ok_numid','ok_dashid','bad_summary'):  # 未知回执 → 只读核实 list
                 args_seq = [argv, ['list','--limit','3','--json']]
             else:                    # pending / hang / skip_status / slow_garbage：不再有后续引擎调用
                 args_seq = [argv]
@@ -395,6 +414,27 @@ else: sys.exit(1)
         out = self.call('store: full verify fact ok')
         self.assertIn('verified by read-back', out)
 
+    def test_strict_id_whitelist_and_readback_types(self):
+        # R3#2：数字 id 12345678（JSON number，不得 str() 强转）、"a-------"（宽松 hex-连字符）
+        # 都不是有效 id → 回执 unknown（不 Saved、不引导重发）
+        for mode in ('ok_numid', 'ok_dashid'):
+            out = self.call('store: strict fact', mode=mode)
+            self.assertIn('store unknown', out, mode)
+            self.assertNotIn('Saved', out, mode)
+            self.assertIn('Do NOT resend', out, mode)
+        # 回读三方 id：summary.id 正确但 entry.id 错（'DIFFERENT'）/缺失 → mismatch，Saved 保留
+        for mode in ('show_entrydiff', 'show_noentryid'):
+            out = self.call('store: strict fact entry', mode=mode)
+            self.assertIn('Saved:', out, mode)                    # 有效写回执保留
+            self.assertIn('DIFFERENT', out, mode)
+            self.assertNotIn('verified by read-back', out, mode)
+            self.assertNotIn('Read-back unavailable', out, mode)  # 是 mismatch，不是 unavailable
+        # 数字 content（42 ≠ "42"）不做强转匹配 → mismatch，Saved 保留
+        out = self.call('store: strict fact num', mode='show_numcontent')
+        self.assertIn('Saved:', out)
+        self.assertIn('DIFFERENT', out)
+        self.assertNotIn('verified by read-back', out)
+
     def test_slow_bad_receipt_respects_shared_budget(self):
         before = self.recorded()
         out = self.call('store: slow garbage fact', mode='slow_garbage',
@@ -409,16 +449,18 @@ else: sys.exit(1)
             self.assertIn('store unknown', out, mode)
             self.assertNotIn('may already be written', out, mode)
     def test_stop_after_hook_store_does_not_query_engine(self):
+        # R3 终案：磁盘凭证免催已取消——store 成功后 Stop 仍催（deny），且零引擎查询
         self.call('store: durable fixture fact')
         before = self.recorded()
-        self.assertEqual(self.call(event='Stop'), '')
-        self.assertEqual(self.recorded(), before)
+        self.assertTrue(stop_denied(self.call(event='Stop')))   # 不凭旧回执免催
+        self.assertEqual(self.recorded(), before)               # 零引擎查询
 
     def test_turn_receipt_suppression_is_request_scoped(self):
-        # T18：只有「同会话、本轮 prompt 之后」的成功写回执才免催；新请求不被旧轮抑制
+        # R3 终案：磁盘凭证免催已取消——Stop 不凭任何旧记录免催；同请求二次 Stop 由 latch 放行
         self.call('store: durable fixture fact')
-        self.assertEqual(self.call(event='Stop'), '')
-        self.call('another ordinary input without storing')   # 新请求（未存）
+        self.assertTrue(stop_denied(self.call(event='Stop')))      # store 后仍催
+        self.assertEqual(self.call(event='Stop'), '')              # 同请求二次 Stop：latch 放行
+        self.call('another ordinary input without storing')        # 新请求：重新武装
         self.assertTrue(stop_denied(self.call(event='Stop')))
 
     def test_stop_once_per_request_latch(self):
@@ -432,7 +474,7 @@ else: sys.exit(1)
         self.assertTrue(stop_denied(self.call(event='Stop')))
 
     def test_receipt_suppression_is_session_scoped(self):
-        # 会话隔离：A 会话的写回执不免 B 会话的催存
+        # 会话隔离（R3 终案后由 latch 保证）：A 会话的写回执/催存不影响 B 会话的收尾锁
         self.call('store: durable fixture fact', session='a')
         self.assertTrue(stop_denied(self.call(event='Stop', session='b')))
 
@@ -472,7 +514,9 @@ else: sys.exit(1)
 
 class TurnStateFiles(unittest.TestCase):
     """复审 R2#3：会话独立状态文件 st_<sid>.json——共享 turn_map.json 的读-改-写回滚窗口
-    不复存在。直接驱动 hook 的状态函数（引擎路径由 CredentialGuard 覆盖），状态目录隔离。"""
+    不复存在。R3 终案后这些文件只是诊断轨迹（免催已取消、turn_stored 恒 False），本组
+    同时钉住「轨迹按会话隔离不被回滚」与「任何磁盘状态都不再影响 Stop 决策」。
+    直接驱动 hook 的状态函数（引擎路径由 CredentialGuard 覆盖），状态目录隔离。"""
 
     @classmethod
     def setUpClass(cls):
@@ -499,35 +543,39 @@ class TurnStateFiles(unittest.TestCase):
         self.assertFalse((self.dir / 'turn_map.json').exists())   # 共享 map 已删除
 
     def test_barrier_interleave_b_cannot_roll_back_a(self):
-        # 复审确定性交错：A 上轮 prompt_ts=T-50, store_ts=T-10（免催成立）→ B 载入自己的快照
+        # 复审确定性交错：A 上轮 prompt_ts=T-50, store_ts=T-10 → B 载入自己的快照
         # → A 新请求把 prompt_ts 推进到 T+50 → B 写回。共享 map 下 B 的整文件写回会把 A
-        # 恢复成旧 store_ts>=prompt_ts 误免催；独立文件下 B 只写 B 的文件。
+        # 恢复成旧快照；独立文件下 B 只写 B 的文件。R3 终案：免催已取消（turn_stored 恒 False，
+        # 复审#1 的同会话 RMW 屏障交错即使恢复旧凭证也不再影响任何决策）——本测试钉住
+        # 轨迹隔离本身与恒 False 语义。
         now = time.time()
         self.hook._state_update('a', {'prompt_ts': now - 50.0})    # A 上轮请求
         self.hook.mark_store('a', now - 50.0)                      # A 上轮写回执（绑定同代）
-        self.hook._state_update('a', {'store_ts': now - 10.0})     # 钉住确定性时钟：store 在 prompt 后、仍在新鲜窗内
-        self.assertTrue(self.hook.turn_stored('a'))                # 前提：上轮免催成立
+        self.hook._state_update('a', {'store_ts': now - 10.0})     # 钉住确定性时钟：store 在 prompt 后
+        self.assertFalse(self.hook.turn_stored('a'))               # 免催已取消：即使凭证「成立」也 False
         self.assertEqual(self.hook._state_load('b'), {})           # barrier：B 载入自己的空快照
         self.hook._state_update('a', {'prompt_ts': now + 50.0})    # A 新真实请求
-        self.assertFalse(self.hook.turn_stored('a'))               # A 新轮未存：应催
+        self.assertFalse(self.hook.turn_stored('a'))               # 恒 False
         self.hook._state_update('b', {'prompt_ts': now + 50.0})    # B 写回（旧共享 map 语义下整文件覆盖）
         self.assertEqual(self.hook._state_load('a').get('prompt_ts'), now + 50.0)  # A 的推进未丢
-        self.assertFalse(self.hook.turn_stored('a'))               # A 未被回滚成免催
+        self.assertFalse(self.hook.turn_stored('a'))               # 恒 False（B 的写回无从影响决策）
 
     def test_delayed_old_store_does_not_suppress_new_request(self):
-        # 请求代绑定：旧请求的写回执延迟到新 prompt 之后完成（store_req_ts=旧代）不免催新轮
+        # R3 终案：免催已取消——无论请求代如何（旧代/新代凭证「成立」与否）turn_stored 恒 False，
+        # 复审#1 的「旧请求延迟完成的写回执恢复免催」路径整体不存在了
         old_gen = self.hook.mark_prompt('s')
         self.hook.mark_store('s', old_gen)
-        self.assertTrue(self.hook.turn_stored('s'))                 # 旧轮内：免催成立
+        self.assertFalse(self.hook.turn_stored('s'))               # 免催已取消：旧轮内也 False
         self.hook.mark_prompt('s')                                  # 新请求（新代）
         self.hook.mark_store('s', old_gen)                          # 旧请求延迟完成的写（带旧代）
-        self.assertFalse(self.hook.turn_stored('s'))                # 不免催新轮
+        self.assertFalse(self.hook.turn_stored('s'))                # 恒 False
         new_gen = self.hook.mark_prompt('s')                        # 再来一轮并正常存
         self.hook.mark_store('s', new_gen)
-        self.assertTrue(self.hook.turn_stored('s'))
+        self.assertFalse(self.hook.turn_stored('s'))                # 恒 False（回执仍诚实给模型）
 
     def test_concurrent_session_updates_never_lost(self):
-        # A/B 并发更新不丢失：各会话独立文件，交错读写互不可见
+        # A/B 并发更新不丢失：各会话独立文件，交错读写互不可见；R3 终案后轨迹完好即可，
+        # 决策不读它（turn_stored 恒 False）
         sessions = ['session-%02d' % i for i in range(8)]
 
         def churn(name):
@@ -541,7 +589,9 @@ class TurnStateFiles(unittest.TestCase):
         for thread in threads:
             thread.join()
         for name in sessions:
-            self.assertTrue(self.hook.turn_stored(name), name)      # 每会话末轮凭证完好
+            trace = self.dir / ('st_' + self.hook._sid_key(name) + '.json')
+            self.assertTrue(trace.exists(), name)                  # 诊断轨迹仍在
+            self.assertFalse(self.hook.turn_stored(name), name)    # 决策恒不受轨迹影响
 
 
 class VersionConsistency(unittest.TestCase):
