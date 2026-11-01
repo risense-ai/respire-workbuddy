@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.4.2 — 2026-11-01 · 两份 SKILL.md 英文化
+
+- `plugins/respire/skills/respire/SKILL.md` 与 `connector/skills/respire-memory/SKILL.md` 全文英文化（dimcode 家族结构；connector 保留命令表格）；「记：」前缀与信封解析不变；触发词保留中文供路由
+- 版本三方同步 0.4.2（hook VERSION / plugin manifest / marketplace 条目）
+
 ## 0.4.1 — 2026-10-31 · Stop 恢复＋提示词英文化（dimcode 同款）＋疑似凭据拦截
 
 - **hooks.json 命令追加第三回退 `|| py -3`**：真实 WorkBuddy 宿主（Windows）以 cmd.exe spawn 钩子命令，默认 PATH 下 `python3`/`python` 均被 Microsoft Store 别名桩接管（实测 rc=49、报 "Python was not found"），原双回退链在装有 python.org Python 的 Windows 宿主上全数落空；`py` 启动器随官方安装器入 PATH，作第三回退。validate 同步要求三事件携带该回退。
