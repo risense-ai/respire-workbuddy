@@ -95,8 +95,8 @@ python3 connector/install_local.py --uninstall  # 卸（保留市场注册）
 | --- | --- |
 | `SessionStart` | 注入记忆层简则（何时翻忆、如何落库、红线），对整会话生效；**一次探测三态**——未登录附注册引导（rsrs.rs 注册、`rsrs register` 首设备、`rsrs login --oauth --no-open` 代开授权链接）、库空（<10 条）附首日存料与导入引导、缺语义模型附**可选**装法；常态零打扰 |
 | `UserPromptSubmit` | 自动 `rsrs recall --titles`：**标题档注入**——只给分数＋8 位短 id＋标题，正文由 agent `rsrs show <id>` 按需取（附因果链）；默认**直出不过滤**，噪音边界＝rsrs skip 门＋limit 5＋标题档 |
-| `prompt` 以「记：」「存：」「remember:」开头 | 直接 `rsrs remember … --importance important` 落库并回执；判后即存判为相似时**不写入**、回执转述候选（`--parent` 挂靠或 `--force` 直写），由模型决断；回执硬约束 AI 抽「主语＋动作＋结果」事实句 `retitle` 替换暂拟题 |
-| `Stop`（AI 干完活） | **默认注册**（0.4.1 恢复），存储检查续跑一轮催存；`store_nudge_every` 节流——默认 1=每轮检查，设 0 关闭、设 N 每 N 轮一次。防误催三道：`stop_hook_active=true` 放行；近 10 分钟本层已落库不催；近 10 分钟引擎侧有落库（agent 直接 `rsrs remember` 也算）同样不催 |
+| `prompt` 以「记：」「存：」「remember:」开头 | 直接 `rsrs remember … --importance important` 落库并回执，**回执按结果状态机**：`ok`/`warn` → **已写入**（warn 附引擎警告如 parent 未解析——不误报失败、不引导重发），随后 `show` 写后回读核验（verified / mismatch / unavailable 如实标注，核验为**全量比对**：三方 id（summary.id 与 entry.id 均原生字符串且等于写入 id）＋标题＋完整正文，类型不符不强转——数字 42 ≠ "42"）；`pending` → **未写入**，转述候选（带短 id）＋引擎建议动作（改＞并＞挂＞存全量转达，先 `show` 读候选正文再决断）；超时/坏回执 → **结果未知**，回执只允许只读核实（`rsrs list`/`rsrs show`）并**明令禁止重发**（重复写风险；`ok`/`warn` 缺有效 id——**id 须原生字符串且为标准 UUID 或 16+ 位 hex，数字 id 与宽松 hex-连字符不算**、畸形 summary 也归 unknown，不当失败也不当成功）；remember/show/list 共享 hook 时间预算，剩余不足直接 unknown、不再追加引擎调用。回执硬约束 AI 抽「主语＋动作＋结果」事实句 `retitle` 替换暂拟题 |
+| `Stop`（AI 干完活） | **默认注册**，存储检查续跑一轮催存；`store_nudge_every` 节流（1=每轮，0=关，N=每 N 轮）。**每个真实请求至多催一次**：`stop_hook_active=true` 放行 ＋ 每会话原子一次收尾锁（`O_EXCL` 独占创建、无 TTL；**仅可识别的新真实 prompt** 删除重新武装——宿主内部提示（`skip_prefixes` 命中）不算，不重武装不催第二轮；无法落锁一律放行，绝不无锁 deny；会话间互不干扰）。**免催不依赖任何磁盘凭证（0.4.6 终案，同 zcode/dimcode）**：跨事件（UserPromptSubmit→Stop 为两个独立进程）没有可靠的「当前请求」磁盘身份——同会话并发状态交错可恢复旧请求凭证、失败-恢复窗口无法闭合，故「记：」成功回执不再抑制本请求的 Stop（回执仍诚实告知已存，照常催一轮收尾）；防重唯一依据就是上面的收尾锁。引擎侧全库时间戳无法归属到会话，也从未用作免催（其他会话写入会误抑制）；`Stop` 完全不查询引擎，也因此不存在查库失败强迫续跑的路径。**重放边界**：WorkBuddy 事件流未提供请求标识，无宿主请求 ID 时同文本重放按新请求处理（保守重武装），由收尾锁保证至多催一次 |
 | `prompt` 以 `/nomem` 开头 | 本轮跳过召回 |
 | `skills/respire` | 按需加载的操作法（recall/remember/show/forget/sync 与信封解析要点）；**注意技能只是说明书，动作全由钩子驱动** |
 
@@ -125,7 +125,7 @@ python3 connector/install_local.py --uninstall  # 卸（保留市场注册）
 | `enabled` | `true` | **总开关**：false=全线静默 |
 | `store_nudge_every` | `1` | Stop 存储检查节流：1=默认每轮检查、N=每 N 轮一次、**0=关闭**（Stop 钩子仍注册，仅检查静默） |
 | `log` | `true` | `hooks/hook.log` 留痕（超 256KB 清轮，口令/token/长数字自动打码） |
-| `skip_prefixes` | `[]` | 宿主内部提示白名单：prompt 以列表中任一前缀开头（大小写不敏感）则本轮不召回也不落库——宿主给自动化任务写 Recap 之类时按需加 |
+| `skip_prefixes` | `[]` | 宿主内部提示白名单：prompt 以列表中任一前缀开头（大小写不敏感）则本轮不召回也不落库、**也不重新武装 Stop 收尾锁**（内部 Recap 不是真实请求）——宿主给自动化任务写 Recap 之类时按需加 |
 
 过滤策略：**默认不设阈值**——三层已框住噪音：rsrs skip 门、limit 5、标题档。历史教训：阈值 0.56→0.31 每降一次都是真相关被拦的补救，漏召代价远大于多看两行标题。
 
@@ -158,7 +158,7 @@ codebuddy plugin uninstall respire@risense-workbuddy
 
 PR 和 main 在 Linux、Windows、macOS 运行包自检、独立全桩行为测试和发布策略测试，并验证归档。CI 不执行旧 `test_hooks.sh` 的真实引擎/写探针段，不安装 rsrs 或操作用户数据库。
 
-- `python plugins/respire/tests/test_ci.py`：临时桩正向召回与死桩负对照、凭据零调用/零泄漏、Stop 防重入、N=3/0 节流、近期/陈旧/查询失败，以及市场/manifest/hook 三方版本与错配负对照。
+- `python plugins/respire/tests/test_ci.py`：临时桩正向召回与死桩负对照、凭据零调用/零泄漏、Stop 防重入与零引擎查询、N=3/0 节流、每会话锁（A→B→A/无 TTL/不可写放行）、回执边界（缺 id/坏 summary→unknown、错 id/尾部篡改回读→mismatch、慢坏回执+紧预算），以及市场/manifest/hook 三方版本与错配负对照。
 - `python -m unittest discover -s plugins/respire/tests -p test_release.py -v`：精确 tag/SHA、ZIP 安全、版本、冲突拒绝与幂等恢复。
 
 向主仓推送 `vMAJOR.MINOR.PATCH` 标签后，工作流确认标签提交属于 main，并从该提交按历史 Release 布局归档：市场清单、文档/安装脚本及 `plugins/respire`，不混入 `connector`。ZIP 注释记录源提交，Release 附 ZIP 与 `SHA256SUMS`。

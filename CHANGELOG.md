@@ -1,5 +1,74 @@
 # Changelog
 
+## 0.4.8 — 2026-11-01 · 第五轮：generation-scoped 锁文件（原子 claim 终案）
+
+### Fixed
+
+- **gen-scoped latch（R5）**：锁文件名包含 generation 哈希（`.latch_<sid>_<genhash>`）——**新 generation 天然获得新锁文件**（首个 Stop 可 claim），**旧 generation 的锁/迟到事件与新 generation 互不影响**（不同文件）；**无需删除锁来重武装**（消除删除路径的一切失败窗口——R4 的读比较+写+删锁三步非原子，迟到/并发/读取失败三个边界全部突破）。Stop 事件同样读取 `generation_id` 并传入 `latch_claim`——迟到旧 gen Stop 用旧 gen 自己的锁（不消耗新 gen 预算）；同 gen 的 Stop 共享同一锁文件（重复/并发/迟到只 claim 一次）。无 generation 的旧宿主回落单一锁文件+删除重武装（既有行为）。复审三个反例（迟到 g1 覆写、读取失败重删锁、同 gen 并发双 rearm）在 gen-scoped 文件名隔离下**结构性不可能**。
+
+## 0.4.7 — 2026-11-01
+## 0.4.7 — 2026-11-01 · 第四轮：generation 感知的一次收尾锁
+
+### Fixed
+
+- **官方 generation_id 契约（R4）**：[CodeBuddy Code v2.144.0+](https://www.workbuddy.ai/docs/cli/release-notes/v2.144.0) 的 UserPromptSubmit 携带 `generation_id`（同对话回合稳定、可与 Stop 关联）——`mark_prompt(session, generation)` 现按 **session+generation** 关联判定：**同 generation 重投/迟到/并发事件不重新武装 latch**（先比较 `st_<sid>.gen` 再决定删锁；同 gen 直接跳过 rearm）；**旧 generation 迟到不撤销新 generation 的保护**（gen 不同→忽略，不 rearm 不覆写 gen 文件）；**不同 generation 同文本正常新一轮**（正常 rearm）。无 generation_id 的旧宿主保持既有行为（每次 rearm），README 注明版本边界。gen 文件读不到时保守 rearm（兼容方向）；写入失败不影响 rearm（latch 是硬保证）。状态读取/持久化失败均保守放行，不依赖失败后继续 deny。
+
+### Changed
+
+- 测试：CI 39/39（+3：同 gen 重投不 rearm、旧 gen 迟到不撤销新保护、无字段兼容行为）。
+
+## 0.4.6 — 2026-11-01
+## 0.4.6 — 2026-11-01 · 第三轮复审整改（PR #5 复审三项 P2，移植 zcode/dimcode 已合并终案）
+
+### Changed
+
+- **R3#1 取消磁盘凭证免催（终案，同 zcode 0.1.9 / dimcode 0.5.14 复核⑥）**：同会话 `_state_update`（load→patch→rename）无锁 RMW 可被两进程屏障交错恢复旧请求凭证（复审已复现：新 prompt_ts 被旧快照回滚、旧代 store_req_ts 重新生效、turn_stored=True 误免催）——跨事件（UserPromptSubmit→Stop 是两个独立 hook 进程）不存在可靠的「当前请求」磁盘身份，失败-恢复窗口无法闭合。按终案**取消免催优化**：`turn_stored` 恒 `False`，`on_stop` 删除该调用分支（latch 落锁即催）——防重唯一依据回归 latch 语义（nudge 时 `O_EXCL` 创建、下一次真实 prompt 删除）。「记：」写回执仍诚实输出给模型（告知已存）；`st_<sid>.json` 状态文件保留为诊断轨迹，不再影响 Stop 决策。
+- **R3#2 畸形 ID／回读类型严格化**：写回执 id 必须**原生字符串**（JSON 数字 12345678 不做 `str()` 强转）且匹配**标准 UUID 或 16+ 位连续 hex** 白名单（`a-------` 这类宽松 hex-连字符不算）——否则按不可确认归 unknown（不 Saved、不引导重发）。`show` 回读改**三方 id 一致**：summary.id 与 entry.id 均须原生字符串且 === 写入 id（entry.id 错/缺失 → mismatch，不再只核 summary.id）；title/content 须 `isinstance(str)` 后再比对（数字 42 ≠ "42"，不做强转）——类型异常归 mismatch，已写的 Saved 回执保留、绝不冒充 verified。
+- **R3#3 重放边界（README 注明）**：WorkBuddy 事件流不带宿主请求/事件标识，无法区分同事件重投与用户再次发送同文本——保守按新请求处理（重新武装收尾锁），由「每请求至多催一次」的一次收尾锁兜底；不以内容哈希吞掉正常的重复提问。README Stop 行同步（免催不依赖磁盘凭证＋重放边界说明），UserPromptSubmit 行同步 id 白名单与三方 id 回读口径。
+- 测试：CI 35 → 36（+畸形 ID 反例：数字 id／`a-------` → unknown 不 Saved；回读反例：entry.id 错（复审点名的 DIFFERENT 路径）／缺失／数字 content → mismatch 且 Saved 保留；store 后 Stop 仍催、同请求二次 Stop 由 latch 放行；TurnStateFiles 全组翻转为恒 False 并补诊断轨迹存在性断言；Stop 期望 argv 序列改空——launcher 放宽空序列断言，Stop 期间任何 subprocess 即拒绝）；bash 87/0 保持（「记：成功后免催」翻转为仍催 deny，A/B 会话段同步 latch 语义命名，屏障与独立文件断言保留）；版本三方同步 0.4.6。
+
+## 0.4.5 — 2026-11-01 · 复审第二轮整改（PR #5 复审三项 P2）
+
+### Fixed
+
+- **R2#1 内部提示不得重新武装收尾锁**：`on_prompt` 辨别顺序改为 空检查 → `/nomem`（真实请求：mark 后只跳召回）→ `skip_prefixes` 内部白名单（**命中即返回，不 mark、不删锁、不记请求代**）→ `mark_prompt` → 凭据/快存/召回。修复序列：真实请求→Stop deny→同会话内部 Recap（配置 `skip_prefixes`）→Stop——旧顺序里 Recap 先 `mark_prompt` 删掉收尾锁，宿主未带 `stop_hook_active` 时第二个 Stop 会再次 deny；现在必放行。重复投递同一 UserPromptSubmit 文本无请求身份可去重：保守按新真实请求处理（重武装不额外伤害——锁本就只在无新真实请求时保持）。
+- **R2#2 readback 坏 details 不再吞回执**：`show` 回 `status=ok` 但 `details` 非 dict（数组/字符串）时，旧代码 `(doc.get("details") or {}).get("entry")` 抛 AttributeError，异常冒到主入口被 fail-open 兜成**空输出**——已成功的 Saved 回执凭空消失。现在 `details` 加 `isinstance(dict)` 防护：非 dict 一律局部降级 **unavailable**，保留 Saved 回执与禁止重发约束。
+- **R2#3 会话独立状态文件（删除共享 turn_map.json）**：prompt_ts/store_ts/请求代从共享 `turn_map.json`（读-改-写无锁，temp+rename 原子替换挡不住丢失更新——确定性交错「B 读全 map→A 新请求更新 prompt_ts→B 写回旧快照」会把 A 恢复成旧 `store_ts>=prompt_ts`，本轮没写也误免催）迁至**每会话独立 `st_<sid>.json`**（temp+rename 原子替换，各会话各写各的文件，交错无法构成；超 64 个按 mtime 收敛）。**写回执绑定请求代**：`mark_prompt` 返回本请求代 ts，`mark_store` 记 `store_req_ts`，`turn_stored` 要求 `store_req_ts==prompt_ts`——旧请求延迟到新 prompt 之后完成的写回执不免催新轮。
+
+### Changed
+
+- 测试：CI 29 → 35（+复审点名序列「真实请求→deny→内部 Recap→Stop 放行＋零引擎调用＋重放语义」、坏 details 数组/字符串反例、状态文件单测组×4：确定性交错屏障 B 不回滚 A、多会话并发更新不丢失、旧代写回执跨新 prompt 不免催、每会话一文件无共享 map）；bash 72/0 → 87/0（+R2#1 序列四断言、坏 details 两反例、A/B 会话独立状态文件屏障＋快照不变＋turn_map.json 移除断言、A 新请求后旧回执应催；本机含真机只读分支）；版本三方同步 0.4.5。
+
+## 0.4.4 — 2026-11-01 · 维护者复审整改（fix/audit-result-contract-stop-failopen 复审 5 项，WB-07~WB-11）
+
+### Fixed
+
+- **WB-07 一次收尾锁重构（复审#1）**：`.store_turn` 单会话状态改为**每会话独立锁文件**（`O_CREAT|O_EXCL` 原子独占——并发 Stop 只有一个能落锁；锁无 TTL，25 小时后仍占用，只有新真实 prompt 删除重新武装；A→B→A 会话交错不丢锁、不互耗）；无法落锁（状态目录不可写等）一律放行——绝不无锁 deny。prompt_ts/store_ts 移入尽力维护的 per-session map（temp+rename 原子替换、仅按数量收敛），map 失败只损失免催优化，不影响一次上限保证。
+- **WB-08 畸形回执归 unknown（复审#2）**：`ok`/`warn` 缺有效 id（hex/uuid 白名单校验，垃圾 id 不当有效）、非 dict summary（类型防护不再外抛）、未知 status 一律 **unknown**（不当失败、不当成功、禁重发）；`skip` = 引擎按模式拒绝（未写非失败）；仅 `fail` 断言「未接受」。
+- **WB-09 共享 hook 预算（复审#3）**：remember/回读/只读核实共用一个截止时间（`RESPITE_HOOK_BUDGET_S`，默认 20s、预留 2.5s 输出余量）；慢坏回执（接近 STORE_T 才回垃圾）剩余预算不足直接 unknown，不再追加 list——unknown 回执不再可能在输出前被宿主杀掉。
+- **WB-10 回读全量核验（复审#4）**：`show` 回读须 **返回 id＝写入 id ＋ 标题相等＋完整正文相等** 才称 verified；相同前缀不同结论尾部、错误 id 均 mismatch 如实标注；畸形 show 返回 unavailable 并保留已写回执。
+- **WB-11 免催只认可归属凭证（复审#5）**：移除「全库最新写入时间晚于本轮 prompt 即免催」（引擎时间戳无法归属会话，B 会话写入会误免催 A）；**Stop 完全不再查询引擎**（也因此不存在查库失败强迫续跑的路径）；`/nomem` 仍算新请求（mark 提前到跳召回判断之前），重新武装收尾锁、只跳召回。
+
+### Changed
+
+- 测试：CI 24 → 29（+A→B→A 交错、无 TTL 老锁、状态不可写放行、Stop 零引擎查询、缺 id/垃圾 id/坏 summary 回执、错 id/尾部篡改回读、慢坏回执+紧预算零追加调用）；bash 67/0 → 72/0（轮次状态目录改 `cygpath -m` 混合路径、`PROMPT_VAL` 豁免 MSYS 环境转换、+25 小时锁仍占用、/nomem 重武装、不可写目录放行、Stop 零引擎调用断言）；版本三方同步 0.4.4。
+
+## 0.4.3 — 审计整改：写结果状态机＋Stop fail-open＋请求级免催凭证（WB-01~WB-06）
+
+### Fixed
+
+- **WB-01 Stop fail-open**：查库 `list` 失败/超时/坏信封时直接放行，不再 deny——记忆层故障不得强迫主任务续跑。**同步翻转旧测试错误期望**（`failed→deny` 曾被当正确结果）。
+- **WB-02 未知写结果只读核实**：超时/坏回执/无输出归为 **unknown**——回执明令「`rsrs list`/`rsrs show` 只读核实、禁止重发 remember」（旧文案「手动 rsrs remember 核实」有重复写风险）；秒回坏回执自动 `list` 核对并报告可能已写（附只读 id）。`warn`+有效 id 是**已写入带警告**，如实回执不误报失败。
+- **WB-03 快存回执闭环**：ok/warn 后 `show` 写后回读核验（R11，verified/mismatch/unavailable 如实标注）；pending 保留候选短 id 与引擎建议动作全量（改＞并＞挂＞存，§7.2）。
+- **WB-04 请求级免催凭证**：废除「近 10 分钟任意写入」全局抑制（跨轮误抑制）；改为 `.store_turn`——同会话、本轮 prompt 之后的成功写回执或引擎侧写入才免催。
+- **WB-05 一次收尾锁**：宿主未带 `stop_hook_active` 时同一请求也至多 deny 一次；新 prompt 重新武装。
+
+### Changed
+
+- 测试：CI 桩白名单升级为有序调用序列（remember→show 回读链），spy 支持 warn/pending/silent/hang/show_mismatch；新增 8 个契约测试。bash 套件加 rst 场景复位与状态机/warn/unknown 断言（55/0 → 67/0）；**修复写探针从未写真库的既有 bug**（默认走桩）——现显式传真引擎（Windows 优先 `.CMD` 形式，sh shim 会 WinError 193），实时库判重收紧时优雅 SKIP。
+- `RESPITE_TEST_FAST`/`RESPITE_TURN_STATE` 测试后门；README 行为表同步；`.gitignore` 增 `.store_turn`。
+
+
 ## 0.4.2 — 2026-11-01 · 两份 SKILL.md 英文化
 
 - `plugins/respire/skills/respire/SKILL.md` 与 `connector/skills/respire-memory/SKILL.md` 全文英文化（dimcode 家族结构；connector 保留命令表格）；「记：」前缀与信封解析不变；触发词保留中文供路由
