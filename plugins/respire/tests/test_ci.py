@@ -236,7 +236,7 @@ else: sys.exit(1)
         if session is not None:
             payload['session_id'] = session
         if generation is not None:
-            payload['generation_id'] = generation  # 官方 v2.144.0+ 字段
+            payload['generation_id'] = generation  # 官方 v2.144.0+ 字段（UserPromptSubmit + Stop 均传）
         result = subprocess.run([sys.executable, str(self.launcher)],
                                 input=json.dumps(payload), text=True,
                                 encoding='utf-8', capture_output=True, env=env,
@@ -480,28 +480,41 @@ else: sys.exit(1)
         self.call('store: durable fixture fact', session='a')
         self.assertTrue(stop_denied(self.call(event='Stop', session='b')))
 
-    def test_generation_replay_does_not_rearm_latch(self):
-        # R4（官方 v2.144.0+ 契约）：同 generation 重投不重新武装；新 generation 同文本重新武装
-        # 序列：同 gen UserPromptSubmit → Stop deny → 同 gen 重投 → Stop 放行 → 新 gen 同文本 → Stop deny
+    def test_generation_scoped_once_per_gen(self):
+        # R5：gen-scoped 锁文件——同 gen 的 Stop 只 claim 一次；新 gen 各自独立
         g1 = 'gen-aaa-111'
         self.call('real question one', generation=g1)
         self.assertEqual(json.loads(self.call(event='Stop', generation=g1))
                          ['hookSpecificOutput']['permissionDecision'], 'deny')
-        self.call('real question one', generation=g1)   # 同 gen 重投（迟到/重复投递）
-        self.assertEqual(self.call(event='Stop', generation=g1), '')  # 未重新武装：放行
+        # 同 gen 重投（顺序直接）→ Stop 放行（同 gen 锁已存在）
+        self.call('real question one', generation=g1)
+        self.assertEqual(self.call(event='Stop', generation=g1), '')
+        # 新 gen 同文本：正常新一轮（新锁文件）
         g2 = 'gen-bbb-222'
-        self.call('real question one', generation=g2)   # 新 generation：同文本也是新请求
+        self.call('real question one', generation=g2)
         self.assertEqual(json.loads(self.call(event='Stop', generation=g2))
                          ['hookSpecificOutput']['permissionDecision'], 'deny')
 
-    def test_stale_generation_cannot_undo_new_protection(self):
-        # 旧 generation 迟到到达：不撤销新 generation 已落锁/已催的状态
+    def test_stale_generation_after_new_deny_does_not_re_deny(self):
+        # R5 复审反例①：g1 请求/收尾 → g2 请求 → g2 Stop 已 deny → 迟到 g1 prompt → g2 Stop 放行
         g1, g2 = 'gen-old-1', 'gen-new-2'
         self.call('first question', generation=g1)
-        self.call('second question', generation=g2)     # 新请求（rearm）
-        self.call('first question', generation=g1)      # 旧 gen 迟到重投：不 rearm、不覆写 gen
+        self.call(event='Stop', generation=g1)  # g1 deny（gen-scoped 锁 latch_g1）
+        self.call('second question', generation=g2)
         self.assertEqual(json.loads(self.call(event='Stop', generation=g2))
-                         ['hookSpecificOutput']['permissionDecision'], 'deny')  # 新请求仍可催
+                         ['hookSpecificOutput']['permissionDecision'], 'deny')  # g2 deny
+        self.call('first question', generation=g1)  # 迟到 g1 重投：不影响 g2 的锁
+        self.assertEqual(self.call(event='Stop', generation=g2), '')  # g2 Stop 放行
+
+    def test_stale_old_gen_stop_does_not_consume_new_gen_budget(self):
+        # R5 复审补充：迟到旧 gen 的 Stop 不消耗新 gen 的预算（各用各的锁文件）
+        g1, g2 = 'gen-o', 'gen-n'
+        self.call('q1', generation=g1)
+        self.call(event='Stop', generation=g1)  # g1 deny
+        self.call('q2', generation=g2)
+        self.call(event='Stop', generation=g1)  # 迟到 g1 Stop：用自己的锁（已存在→放行）
+        self.assertEqual(json.loads(self.call(event='Stop', generation=g2))
+                         ['hookSpecificOutput']['permissionDecision'], 'deny')  # g2 仍可催
 
     def test_no_generation_field_keeps_compatible_behavior(self):
         # 无 generation_id（旧宿主/旧版本）：每次非内部 UserPromptSubmit 重新武装（既有行为）

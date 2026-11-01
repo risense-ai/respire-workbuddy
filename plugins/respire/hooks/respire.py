@@ -16,7 +16,7 @@ import subprocess
 import sys
 import time
 
-VERSION = "0.4.7"
+VERSION = "0.4.8"
 
 # 超时窗（秒）：须盖住 rsrs runtime 冷启动（实测 doctor 模型加载 7s+），否则首轮静默、热后即灵
 RECALL_T = 14
@@ -235,9 +235,19 @@ def _sid_key(session: str) -> str:
     return hashlib.sha1(("respire-turn-v2:" + (session or "~")).encode("utf-8", "replace")).hexdigest()[:16]
 
 
-def _latch_path(session: str):
+def _latch_path(session: str, generation: str = ""):
+    """R5：generation-scoped 锁文件——带 generation 时锁名含 gen 哈希：
+    新 generation 天然获得新锁文件（首个 Stop 可 claim），旧 generation 的锁/迟到事件
+    不影响新 generation（不同文件）；**无需删除锁来重武装**（消除删除路径的一切失败窗口）。
+    无 generation（旧宿主）回落单一锁文件，由 mark_prompt 删除重武装（既有行为）。"""
     d = _turn_dir()
-    return os.path.join(d, ".latch_" + _sid_key(session)) if d else None
+    if not d:
+        return None
+    if generation:
+        import hashlib
+        gkey = hashlib.sha1(generation.encode("utf-8", "replace")).hexdigest()[:12]
+        return os.path.join(d, ".latch_%s_%s" % (_sid_key(session), gkey))
+    return os.path.join(d, ".latch_" + _sid_key(session))
 
 
 def _state_path(session: str):
@@ -301,9 +311,10 @@ def _state_prune(keep: int = STATE_FILES_MAX):
         pass
 
 
-def latch_claim(session: str) -> bool:
-    """原子一次收尾锁：独占创建成功=True（本次可 block）；已存在/任何失败=False（放行方向）。"""
-    p = _latch_path(session)
+def latch_claim(session: str, generation: str = "") -> bool:
+    """原子一次收尾锁：O_EXCL 独占创建；generation-scoped（R5）——同 gen 的 Stop 共享
+    同一锁文件，重复/并发/迟到只 claim 一次；不同 gen 各自独立。失败方向=放行。"""
+    p = _latch_path(session, generation)
     if not p:
         return False
     try:
@@ -315,8 +326,12 @@ def latch_claim(session: str) -> bool:
         return False  # FileExistsError=已催过；其余失败=无锁不 block
 
 
-def latch_rearm(session: str) -> None:
-    """新真实请求重新武装：删除本会话锁。删不掉时保持上锁（宁可少催，不重复催）。"""
+def latch_rearm(session: str, generation: str = "") -> None:
+    """重武装（仅 legacy 无 generation 模式）：删除本会话单一锁。
+    generation-scoped 模式（R5）：**no-op**——新 gen 用新锁文件，无需删除旧锁；
+    删不掉时保持上锁（宁可少催，不重复催）。"""
+    if generation:
+        return  # gen-scoped：新代新锁，不删除
     p = _latch_path(session)
     if not p:
         return
@@ -364,16 +379,15 @@ def mark_prompt(session: str, generation: str = "") -> float:
     gen 文件读不到时保守 rearm（缺字段输入的兼容方向）；写入失败不影响 rearm（latch 是硬保证）。"""
     ts = time.time()
     if generation:
-        cur = _read_gen(session)
-        if cur is not None and cur == generation:
-            # 同 generation 重投/迟到重放：不是新请求——不 rearm、不覆写 gen
-            _state_update(session, {"prompt_ts": ts})  # 仅诊断轨迹
-            log_event({"log": True}, "prompt", "gen_replay_skip", generation[:16])
-            return ts
+        # R5 gen-scoped：rearm 是 no-op（新 gen 天然新锁）；gen 文件仅诊断轨迹
         _write_gen(session, generation)
+        _state_update(session, {"prompt_ts": ts})
+        _state_prune()
+        latch_rearm(session, generation)  # no-op for gen-scoped
+        return ts
     _state_update(session, {"prompt_ts": ts})
     _state_prune()
-    latch_rearm(session)
+    latch_rearm(session)  # legacy：删除单一锁重武装
     return ts
 
 
@@ -792,8 +806,11 @@ def on_stop(data: dict, cfg: dict, engine) -> str:
     except Exception:
         pass
     session = str(data.get("session_id") or "")
-    # 一次收尾锁：O_EXCL 原子独占；无法落锁（含目录不可写）一律放行——绝不无锁 block
-    if not latch_claim(session):
+    generation = str(data.get("generation_id") or "")  # R5：Stop 也与 generation 关联
+    # 一次收尾锁：O_EXCL 原子独占（generation-scoped）；无法落锁一律放行——绝不无锁 block。
+    # 同 gen 的 Stop 共享同一锁文件（重复/并发/迟到只 claim 一次）；迟到旧 gen Stop 用
+    # 旧 gen 自己的锁文件——不消耗新 gen 的预算。
+    if not latch_claim(session, generation):
         log_event(cfg, "stop", "once_latch_skip")
         return ""
     # R3 终案：磁盘写回执免催已取消（turn_stored 恒 False，不再调用）——latch 落锁即催，

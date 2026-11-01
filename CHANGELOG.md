@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.4.8 — 2026-11-01 · 第五轮：generation-scoped 锁文件（原子 claim 终案）
+
+### Fixed
+
+- **gen-scoped latch（R5）**：锁文件名包含 generation 哈希（`.latch_<sid>_<genhash>`）——**新 generation 天然获得新锁文件**（首个 Stop 可 claim），**旧 generation 的锁/迟到事件与新 generation 互不影响**（不同文件）；**无需删除锁来重武装**（消除删除路径的一切失败窗口——R4 的读比较+写+删锁三步非原子，迟到/并发/读取失败三个边界全部突破）。Stop 事件同样读取 `generation_id` 并传入 `latch_claim`——迟到旧 gen Stop 用旧 gen 自己的锁（不消耗新 gen 预算）；同 gen 的 Stop 共享同一锁文件（重复/并发/迟到只 claim 一次）。无 generation 的旧宿主回落单一锁文件+删除重武装（既有行为）。复审三个反例（迟到 g1 覆写、读取失败重删锁、同 gen 并发双 rearm）在 gen-scoped 文件名隔离下**结构性不可能**。
+
+## 0.4.7 — 2026-11-01
 ## 0.4.7 — 2026-11-01 · 第四轮：generation 感知的一次收尾锁
 
 ### Fixed

@@ -12,7 +12,7 @@
       "name": "respire",
       "source": "./plugins/respire",
       "description": "respire memory for WorkBuddy: title-tier recall every round, one-prefix store, model-optional degradation.",
-      "version": "0.4.7",
+      "version": "0.4.8",
       "category": "Productivity"
     }
   ]
