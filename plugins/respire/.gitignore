@@ -1,1 +1,4 @@
 .store_turn
+st_*.json
+.latch_*
+turn_map.json

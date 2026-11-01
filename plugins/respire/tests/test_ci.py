@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Portable, isolated hook tests. No real engine discovery or user data access."""
+import importlib.util
 import json
 import os
 import re
@@ -8,6 +9,9 @@ from pathlib import Path
 import subprocess
 import sys
 import tempfile
+import threading
+import time
+from unittest import mock
 import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -113,6 +117,14 @@ elif sub == 'show':
     if mode == 'show_fail':
         print(json.dumps({'status':'fail','errors':['not found']}))
         sys.exit(2)
+    # 复审 R2#2 反例：ok 信封 + details 非 dict（数组/字符串）——readback 须降级 unavailable，
+    # 不得抛 AttributeError 让主入口 fail-open 兜成空输出、吞掉已写回执
+    if mode == 'show_badetails':
+        print(json.dumps({'status':'ok','summary':{'id':sys.argv[2],'title':'stub'},'details':[{}]}))
+        sys.exit(0)
+    if mode == 'show_strdetails':
+        print(json.dumps({'status':'ok','summary':{'id':sys.argv[2],'title':'stub'},'details':'str'}))
+        sys.exit(0)
     title, content = 'stub', 'stub'
     try:
         for line in open(os.environ['TEST_CALLS'], encoding='utf-8').read().splitlines():
@@ -170,9 +182,11 @@ else: sys.exit(1)
                         PYTHONDONTWRITEBYTECODE='1', PYTHONUTF8='1')
 
     def call(self, prompt='', event='UserPromptSubmit', mode='ok', active=False, every=1,
-             session='s1', fast=False, extra_env=None, list_mode=None):
-        self.config.write_text(json.dumps({'rsrs':str(self.engine), 'session_rules':True,
-                                          'store_nudge_every':every}), encoding="utf-8")
+             session='s1', fast=False, extra_env=None, list_mode=None, skip=None):
+        config = {'rsrs': str(self.engine), 'session_rules': True, 'store_nudge_every': every}
+        if skip is not None:
+            config['skip_prefixes'] = skip
+        self.config.write_text(json.dumps(config), encoding="utf-8")
         if event == 'Stop':
             args_seq = [['list','--limit','3','--json']]
         elif event == 'SessionStart':
@@ -180,7 +194,8 @@ else: sys.exit(1)
         elif prompt.startswith(('记：','store:')):
             content = prompt.replace('：',':',1).split(':',1)[1].strip()
             argv = ['remember',content,'--title',content,'--importance','important','--json']
-            if mode in ('ok','show_fail','show_mismatch','show_wrongid','show_tail'):
+            if mode in ('ok','show_fail','show_mismatch','show_wrongid','show_tail',
+                        'show_badetails','show_strdetails'):
                 args_seq = [argv, ['show','dddddddddddddddd','--json']]
             elif mode == 'warn':
                 args_seq = [argv, ['show','eeeeeeeeeeeeeeee','--json']]
@@ -421,10 +436,112 @@ else: sys.exit(1)
         self.call('store: durable fixture fact', session='a')
         self.assertTrue(stop_denied(self.call(event='Stop', session='b')))
 
+    def test_internal_prefix_prompt_does_not_rearm_latch(self):
+        # 复审 R2#1 点名序列：真实请求→Stop deny→同会话内部 Recap（配置 skip_prefixes）→Stop
+        # ——必须不再 deny（宿主未带 stop_hook_active 正是收尾锁要兜底的场景）。
+        # 内部事件不 mark：不记请求代、不删锁、不发引擎调用。
+        self.call('real request that will be nudged')
+        self.assertTrue(stop_denied(self.call(event='Stop')))
+        before = self.recorded()
+        internal = 'Host internal recap: summarizing the session for the host task'
+        self.assertEqual(self.call(internal, skip=['Host internal recap']), '')
+        self.assertEqual(self.recorded(), before)          # 内部提示零引擎调用
+        self.assertEqual(self.call(event='Stop'), '')      # 收尾锁未被内部 Recap 重新武装
+        # 重放同一真实请求文本（宿主无请求身份可去重）：保守按新请求处理——重新武装
+        # （重放本就视为新投递，锁只在无新真实请求时保持，不额外伤害）
+        self.call('real request that will be nudged')
+        self.assertTrue(stop_denied(self.call(event='Stop')))
+
+    def test_store_readback_bad_details_type_keeps_receipt(self):
+        # 复审 R2#2：show 回 status=ok 但 details 非 dict（数组/字符串）→ 回读降级 unavailable，
+        # 不得抛 AttributeError 冒到主入口被兜成空输出、吞掉已写的 Saved 回执
+        for mode in ('show_badetails', 'show_strdetails'):
+            out = self.call('store: durable fixture fact', mode=mode)
+            self.assertNotEqual(out, '', mode)                       # 回执没有消失
+            self.assertIn('Saved:', out, mode)                       # 已写入如实保留
+            self.assertIn('Read-back unavailable', out, mode)        # 核验如实降级
+            self.assertNotIn('did not accept', out, mode)            # 不误报失败
+            self.assertNotIn('DIFFERENT', out, mode)                 # 不误报 mismatch
+            self.assertEqual([a[0] for a in self.recorded()][-2:], ['remember', 'show'], mode)
+
     def test_malformed_spy_cannot_pass_positive_control(self):
         self.positive_control()
         self.assertEqual(self.call('ordinary input', mode='malformed'), '')
         self.assertIn('parse_error', self.log.read_text(encoding="utf-8"))
+
+
+class TurnStateFiles(unittest.TestCase):
+    """复审 R2#3：会话独立状态文件 st_<sid>.json——共享 turn_map.json 的读-改-写回滚窗口
+    不复存在。直接驱动 hook 的状态函数（引擎路径由 CredentialGuard 覆盖），状态目录隔离。"""
+
+    @classmethod
+    def setUpClass(cls):
+        spec = importlib.util.spec_from_file_location(
+            'respire_hook_under_test', ROOT / 'hooks' / 'respire.py')
+        cls.hook = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(cls.hook)
+
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory(prefix='workbuddy-state-')
+        self.addCleanup(self.temp.cleanup)
+        self.dir = Path(self.temp.name)
+        patcher = mock.patch.dict(os.environ, {'RESPITE_TURN_STATE': str(self.dir)})
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def test_state_files_are_one_per_session_and_no_shared_map(self):
+        self.hook.mark_prompt('a')
+        self.hook.mark_prompt('b')
+        names = sorted(p.name for p in self.dir.glob('st_*.json'))
+        self.assertEqual(len(names), 2)
+        self.assertIn('st_' + self.hook._sid_key('a') + '.json', names)
+        self.assertIn('st_' + self.hook._sid_key('b') + '.json', names)
+        self.assertFalse((self.dir / 'turn_map.json').exists())   # 共享 map 已删除
+
+    def test_barrier_interleave_b_cannot_roll_back_a(self):
+        # 复审确定性交错：A 上轮 prompt_ts=T-50, store_ts=T-10（免催成立）→ B 载入自己的快照
+        # → A 新请求把 prompt_ts 推进到 T+50 → B 写回。共享 map 下 B 的整文件写回会把 A
+        # 恢复成旧 store_ts>=prompt_ts 误免催；独立文件下 B 只写 B 的文件。
+        now = time.time()
+        self.hook._state_update('a', {'prompt_ts': now - 50.0})    # A 上轮请求
+        self.hook.mark_store('a', now - 50.0)                      # A 上轮写回执（绑定同代）
+        self.hook._state_update('a', {'store_ts': now - 10.0})     # 钉住确定性时钟：store 在 prompt 后、仍在新鲜窗内
+        self.assertTrue(self.hook.turn_stored('a'))                # 前提：上轮免催成立
+        self.assertEqual(self.hook._state_load('b'), {})           # barrier：B 载入自己的空快照
+        self.hook._state_update('a', {'prompt_ts': now + 50.0})    # A 新真实请求
+        self.assertFalse(self.hook.turn_stored('a'))               # A 新轮未存：应催
+        self.hook._state_update('b', {'prompt_ts': now + 50.0})    # B 写回（旧共享 map 语义下整文件覆盖）
+        self.assertEqual(self.hook._state_load('a').get('prompt_ts'), now + 50.0)  # A 的推进未丢
+        self.assertFalse(self.hook.turn_stored('a'))               # A 未被回滚成免催
+
+    def test_delayed_old_store_does_not_suppress_new_request(self):
+        # 请求代绑定：旧请求的写回执延迟到新 prompt 之后完成（store_req_ts=旧代）不免催新轮
+        old_gen = self.hook.mark_prompt('s')
+        self.hook.mark_store('s', old_gen)
+        self.assertTrue(self.hook.turn_stored('s'))                 # 旧轮内：免催成立
+        self.hook.mark_prompt('s')                                  # 新请求（新代）
+        self.hook.mark_store('s', old_gen)                          # 旧请求延迟完成的写（带旧代）
+        self.assertFalse(self.hook.turn_stored('s'))                # 不免催新轮
+        new_gen = self.hook.mark_prompt('s')                        # 再来一轮并正常存
+        self.hook.mark_store('s', new_gen)
+        self.assertTrue(self.hook.turn_stored('s'))
+
+    def test_concurrent_session_updates_never_lost(self):
+        # A/B 并发更新不丢失：各会话独立文件，交错读写互不可见
+        sessions = ['session-%02d' % i for i in range(8)]
+
+        def churn(name):
+            for _ in range(25):
+                gen = self.hook.mark_prompt(name)
+                self.hook.mark_store(name, gen)
+
+        threads = [threading.Thread(target=churn, args=(n,)) for n in sessions]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join()
+        for name in sessions:
+            self.assertTrue(self.hook.turn_stored(name), name)      # 每会话末轮凭证完好
 
 
 class VersionConsistency(unittest.TestCase):

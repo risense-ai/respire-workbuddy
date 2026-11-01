@@ -16,7 +16,7 @@ import subprocess
 import sys
 import time
 
-VERSION = "0.4.4"
+VERSION = "0.4.5"
 
 # 超时窗（秒）：须盖住 rsrs runtime 冷启动（实测 doctor 模型加载 7s+），否则首轮静默、热后即灵
 RECALL_T = 14
@@ -209,10 +209,14 @@ def extract_title(content: str) -> str:
 
 
 TURN_FRESH_S = 1800  # 本轮写回执的新鲜度上限：超窗视为陈旧，不再据此免催
+STATE_FILES_MAX = 64  # st_*.json 历史会话收敛上限（按 mtime 留新；只影响免催优化，不碰锁）
 # 一次收尾锁（复核整改）：每会话独立锁文件，O_CREAT|O_EXCL 原子独占——并发 Stop 只有一个能落锁；
-# 锁不设 TTL：只有新的真实请求（mark_prompt）会删除它重新武装；无法落锁（目录不可写等）一律放行，
-# 绝不在没有锁保护的情况下 block。写回执/时刻存于尽力维护的 per-session map（temp+rename 原子替换），
-# map 失败只损失免催优化，不影响一次上限保证。
+# 锁不设 TTL：只有可识别的新真实请求（mark_prompt）会删除它重新武装；无法落锁（目录不可写等）
+# 一律放行，绝不在没有锁保护的情况下 block。宿主内部提示（skip_prefixes 命中）在 mark_prompt
+# 之前辨别——不重新武装锁、不记请求代（复审 R2#1：真实请求→Stop deny→内部 Recap→Stop 不得再 deny）。
+# 写回执/请求代存于每会话独立状态文件 st_<sid>.json（temp+rename 原子替换）：各会话各写各的文件，
+# 共享 map 的读-改-写回滚窗口不复存在（复审 R2#3）；回执绑定请求代（store_req_ts==prompt_ts），
+# 旧请求延迟完成的写回执不免催新请求；状态文件失败只损失免催优化，不影响一次上限保证。
 
 
 def _turn_dir():
@@ -236,33 +240,32 @@ def _latch_path(session: str):
     return os.path.join(d, ".latch_" + _sid_key(session)) if d else None
 
 
-def _map_path():
+def _state_path(session: str):
     d = _turn_dir()
-    return os.path.join(d, "turn_map.json") if d else None
+    return os.path.join(d, "st_" + _sid_key(session) + ".json") if d else None
 
 
-def _map_load() -> dict:
+def _state_load(session: str) -> dict:
     try:
-        with open(_map_path(), encoding="utf-8") as f:
+        with open(_state_path(session), encoding="utf-8") as f:
             m = json.load(f)
         return m if isinstance(m, dict) else {}
     except Exception:
         return {}
 
 
-def _map_update(session: str, patch: dict) -> bool:
-    """合并更新单会话条目（temp+rename 原子替换）；失败返回 False，绝不抛。"""
-    p = _map_path()
+def _state_update(session: str, patch: dict) -> bool:
+    """合并更新本会话状态文件（temp+rename 原子替换）；失败返回 False，绝不抛。
+    复审 R2#3：文件按会话隔离——B 会话的写只碰 B 的文件，不可能把 A 回滚成旧快照。
+    旧共享 turn_map.json 的确定性交错（B 先读全 map→A 更新 prompt_ts→B 写回旧快照，
+    恢复 A 的旧 store_ts>=prompt_ts 误免催）在此结构下无法构成；同会话内的写入由宿主
+    串行投递（同一会话事件顺序执行），无并发 RMW。"""
+    p = _state_path(session)
     if not p or not session:
         return False
     try:
-        m = _map_load()
-        entry = m.get(session) if isinstance(m.get(session), dict) else {}
-        entry.update(patch)
-        m[session] = entry
-        if len(m) > 64:  # 只按数量收敛陈旧会话，不按时间让锁/凭证失效
-            for k in sorted(m, key=lambda k: float(m[k].get("prompt_ts") or 0))[:len(m) - 64]:
-                m.pop(k, None)
+        m = _state_load(session)
+        m.update(patch)
         tmp = "%s.%d.tmp" % (p, os.getpid())
         with open(tmp, "w", encoding="utf-8") as f:
             json.dump(m, f)
@@ -270,6 +273,33 @@ def _map_update(session: str, patch: dict) -> bool:
         return True
     except Exception:
         return False
+
+
+def _safe_mtime(path: str) -> float:
+    try:
+        return os.path.getmtime(path)
+    except Exception:
+        return 0.0
+
+
+def _state_prune(keep: int = STATE_FILES_MAX):
+    """尽力收敛历史会话状态文件数量（按 mtime 留新 keep 个）。只动 st_ 前缀本层文件；
+    任何失败静默——被清掉的会话最多样免催优化，不影响锁与放行语义。"""
+    try:
+        d = _turn_dir()
+        if not d:
+            return
+        names = [n for n in os.listdir(d) if n.startswith("st_") and n.endswith(".json")]
+        if len(names) <= keep:
+            return
+        paths = sorted((os.path.join(d, n) for n in names), key=_safe_mtime)
+        for p in paths[:len(paths) - keep]:
+            try:
+                os.remove(p)
+            except Exception:
+                pass
+    except Exception:
+        pass
 
 
 def latch_claim(session: str) -> bool:
@@ -297,29 +327,38 @@ def latch_rearm(session: str) -> None:
         pass
 
 
-def mark_prompt(session: str):
-    """真实用户请求开始：尽力记录 prompt_ts；删除一次收尾锁（重新武装）。"""
-    _map_update(session, {"prompt_ts": time.time()})
+def mark_prompt(session: str) -> float:
+    """可识别的新真实用户请求开始：记录请求代 prompt_ts；删除一次收尾锁（重新武装）。
+    返回请求代 ts——本请求内的写回执（mark_store）必须绑定它：旧请求延迟完成的写
+    带旧代，turn_stored 不认，防污染新请求的免催判定（复审 R2#3）。"""
+    ts = time.time()
+    _state_update(session, {"prompt_ts": ts})
+    _state_prune()
     latch_rearm(session)
+    return ts
 
 
-def mark_store(session: str):
-    """本层「记：」成功回执（ok/warn + 有效 id）：尽力记录本轮已存凭证，Stop 免催。"""
-    _map_update(session, {"store_ts": time.time()})
+def mark_store(session: str, req_ts: float = 0.0):
+    """本层「记：」成功回执（ok/warn + 有效 id）：记录写时刻并绑定请求代，Stop 免催。"""
+    _state_update(session, {"store_ts": time.time(), "store_req_ts": float(req_ts or 0.0)})
 
 
 def turn_stored(session: str) -> bool:
-    """本轮（同会话、prompt 之后、新鲜窗内）已有成功写回执。map 失效时保守返回 False。"""
+    """本轮（同会话、同一请求代、prompt 之后、新鲜窗内）已有成功写回执。
+    请求代绑定：store_req_ts 必须等于当前 prompt_ts——旧请求跨新 prompt 完成的写
+    不免催新轮；状态缺失/坏键一律保守 False（宁可多一轮有界收尾，不跨轮误抑制）。"""
     if not session:
         return False
-    e = _map_load().get(session)
+    e = _state_load(session)
     if not isinstance(e, dict):
         return False
     st = e.get("store_ts")
     pt = e.get("prompt_ts")
-    if not isinstance(st, (int, float)) or not isinstance(pt, (int, float)):
+    srt = e.get("store_req_ts")
+    if not (isinstance(st, (int, float)) and isinstance(pt, (int, float))
+            and isinstance(srt, (int, float))):
         return False
-    return st >= pt and time.time() - st < TURN_FRESH_S
+    return srt == pt and st >= pt and time.time() - st < TURN_FRESH_S
 
 
 def readback(bin_path: str, sid: str, title: str, content: str, cfg: dict, budget_s: float):
@@ -338,7 +377,10 @@ def readback(bin_path: str, sid: str, title: str, content: str, cfg: dict, budge
     if not isinstance(doc, dict) or doc.get("status") != "ok":
         log_event(cfg, "readback", "not_ok", str(doc.get("status") if isinstance(doc, dict) else "?"), ms)
         return "unavailable"
-    entry = (doc.get("details") or {}).get("entry")
+    details = doc.get("details")
+    # 复审 R2#2：details 非 dict（数组/字符串等）不得外抛 AttributeError 吞掉已写回执——
+    # 局部降级 unavailable，保留 Saved 文案与禁止重发约束
+    entry = details.get("entry") if isinstance(details, dict) else None
     if not isinstance(entry, dict):
         log_event(cfg, "readback", "no_entry", "", ms)
         return "unavailable"
@@ -379,8 +421,9 @@ def verify_recent_write(bin_path: str, t0: float, max_wait: float = 0):
     return str(d.get("id") or ""), str(d.get("title") or "")
 
 
-def do_store(bin_path: str, content: str, cfg: dict, session: str = "") -> str:
-    """显式落库回执状态机（对齐 CLI 信封语义，审计报告 §7.1/§7.2）：
+def do_store(bin_path: str, content: str, cfg: dict, session: str = "", req_ts: float = 0.0) -> str:
+    """显式落库回执状态机（对齐 CLI 信封语义，审计报告 §7.1/§7.2）。
+    req_ts=本请求 mark_prompt 返回的请求代：写回执绑定它，旧请求延迟完成不免催新请求。
       ok + summary.id   → 已写入：show 回读核验后回执（verified/mismatch/unavailable 如实标注）
       warn + summary.id → 已写入但有警告（parent 未解析 / post-remember hook 告警）——
                           绝不当失败、绝不引导重发；附 errors 摘要并回读
@@ -418,7 +461,7 @@ def do_store(bin_path: str, content: str, cfg: dict, session: str = "") -> str:
 
     # —— 已写入：ok / warn（warn 也是已提交，只是带警告）——
     if parse_ok and sid and status in ("ok", "warn"):
-        mark_store(session)
+        mark_store(session, req_ts)
         if status == "warn":
             warns = [str(e) for e in (doc.get("errors") or []) if isinstance(e, (str, int, float))][:3]
             out = "【respire · stored】Saved with warnings"
@@ -736,14 +779,19 @@ def on_prompt(data: dict, cfg: dict, engine) -> str:
         log_event(cfg, "prompt", "nomem_or_empty", prompt[:40])
         return ""
     session = str(data.get("session_id") or "")
-    mark_prompt(session)  # /nomem 只跳召回，仍是新请求（重新武装收尾锁）（T11/T18）
     if SKIP_PREFIX.match(prompt):
+        # /nomem 是真实用户请求：mark（记请求代＋重新武装收尾锁）后只跳召回（T11/T18）
+        mark_prompt(session)
         log_event(cfg, "prompt", "nomem_or_empty", prompt[:40])
         return ""
     for pat in (cfg.get("skip_prefixes") or []):   # 宿主内部提示白名单：不召回不落库
         if isinstance(pat, str) and pat and prompt[:len(pat)].lower() == pat.lower():
+            # 复审 R2#1：内部事件先于 mark_prompt 辨别——不记请求代、不删一次收尾锁。
+            # 序列「真实请求→Stop deny→同会话内部 Recap→Stop」不得再次 deny；
+            # 重放同一真实请求文本无请求身份可去重，保守按新请求处理（重武装不额外伤害）
             log_event(cfg, "prompt", "internal_skip", pat)
             return ""
+    req_ts = mark_prompt(session)  # 可识别的新真实请求：记请求代并重新武装收尾锁
     if contains_secret(prompt):
         # 只记固定原因码：redact 不覆盖 api_key/token/secret 赋值与 Bearer 值，prompt 摘要不得落日志
         log_event(cfg, "prompt", "secret_skip")
@@ -754,7 +802,7 @@ def on_prompt(data: dict, cfg: dict, engine) -> str:
         if not engine:
             log_event(cfg, "store", "engine_missing", prompt[:40])
             return NO_RSRS
-        return do_store(engine, rest, cfg, session)
+        return do_store(engine, rest, cfg, session, req_ts)
     if len(prompt) < int(cfg["min_prompt_chars"]):
         log_event(cfg, "prompt", "too_short", prompt[:40])
         return ""

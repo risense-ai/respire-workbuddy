@@ -56,6 +56,12 @@ if sub == "list":  # recent=动态毫秒新鲜条 / stale=只有陈旧条 / 其�
              "updated_at": "2020-01-01T00:00:00Z"}]}))
     else:
         print(json.dumps({"status": "fail", "errors": ["stub list fail"]}))
+if sub == "show":  # 复审 R2#2 反例：ok 信封 + details 非 dict（数组/字符串）→ 回读须降级 unavailable、不吞回执
+    if mode == "show_badetails":
+        print(json.dumps({"status": "ok", "summary": {"id": sys.argv[2], "title": "stub"}, "details": [{}]}))
+    elif mode == "show_strdetails":
+        print(json.dumps({"status": "ok", "summary": {"id": sys.argv[2], "title": "stub"}, "details": "str"}))
+    sys.exit(0)
 if sub == "status":
     if mode == "fail":
         print(json.dumps({"status": "fail", "errors": ["stub"]}))
@@ -113,17 +119,18 @@ WRAP
   STUB="$TMP/rsrs-stub.cmd"
 fi
 
-# run <event> [prompt] [config] [mode] [engine] [logfile] [stop_hook_active] [turnstate]
+# run <event> [prompt] [config] [mode] [engine] [logfile] [stop_hook_active] [turnstate] [session]
 # config 只写非 rsrs 项（rsrs 路径由桩注入）；prompt 走 PROMPT_VAL env（顶部已设 MSYS2_ENV_CONV_EXCL
-# 豁免——argv 与 env 值都会被 MSYS 转成 Windows 路径）；turn 状态目录独立，供 Stop 场景复位。
+# 豁免——argv 与 env 值都会被 MSYS 转成 Windows 路径）；turn 状态目录独立，供 Stop 场景复位；
+# session 缺省 selftest，A/B 会话隔离场景显式传。
 run() {
-  local ev="$1" pr="${2-}" cfg="${3:-$CFG_ON}" mode="${4:-ok}" eng="${5:-$STUB}" log="${6:-$TMP/hook.log}" sha="${7:-false}" tb="${8:-$TURNBASE}"
+  local ev="$1" pr="${2-}" cfg="${3:-$CFG_ON}" mode="${4:-ok}" eng="${5:-$STUB}" log="${6:-$TMP/hook.log}" sha="${7:-false}" tb="${8:-$TURNBASE}" sess="${9:-selftest}"
   "$PY3" -c "import json,sys; d=json.load(open(sys.argv[1],encoding='utf-8')); d['rsrs']=sys.argv[2]; json.dump(d, open(sys.argv[3],'w',encoding='utf-8'))" "$cfg" "$eng" "$TMP/cfg-live.json"
-  PROMPT_VAL="$pr" "$PY3" - "$ev" "$sha" <<'PY' | PROMPT_VAL="$pr" RESPITE_CONFIG="$TMP/cfg-live.json" RESPITE_LOG="$log"     RESPITE_NUDGE_STATE="$TMP/nudge" RESPITE_TURN_STATE="$tb" STUB_MODE="$mode" STUB_CALL_LOG="$TMP/stub-calls.log" "$PY3" "$ROOT/hooks/respire.py" "$ev"
+  PROMPT_VAL="$pr" "$PY3" - "$ev" "$sha" "$sess" <<'PY' | PROMPT_VAL="$pr" RESPITE_CONFIG="$TMP/cfg-live.json" RESPITE_LOG="$log"     RESPITE_NUDGE_STATE="$TMP/nudge" RESPITE_TURN_STATE="$tb" STUB_MODE="$mode" STUB_CALL_LOG="$TMP/stub-calls.log" "$PY3" "$ROOT/hooks/respire.py" "$ev"
 import json, os, sys
-ev, sha = sys.argv[1], sys.argv[2]
+ev, sha, sess = sys.argv[1], sys.argv[2], sys.argv[3]
 pr = os.environ.get("PROMPT_VAL", "")
-d = {"hook_event_name": ev, "cwd": "/tmp", "session_id": "selftest"}
+d = {"hook_event_name": ev, "cwd": "/tmp", "session_id": sess}
 if ev == "UserPromptSubmit":
     d["prompt"] = pr
 if ev == "Stop":
@@ -233,6 +240,28 @@ check "25小时前的锁仍占用(无TTL)" "$( [ -n "$OLDLATCH" ] && [ -z "$(run
 rst; run Stop "" "$CFG_STOP" stale "$STUB" "$TMP/stop-nomem.log" >/dev/null
 run UserPromptSubmit "/nomem skip recall only" "$CFG_STOP" ok "$STUB" "$TMP/stop-nomem.log" >/dev/null
 check "/nomem 轮重新武装收尾锁(应催)" "$(run Stop "" "$CFG_STOP" stale "$STUB" "$TMP/stop-nomem.log")" "json:permissionDecision=deny"
+# ---- 复审 R2#1 点名序列：真实请求→Stop deny→同会话内部 Recap（skip_prefixes）→Stop 必放行 ----
+CFG_STOPSKIP="$TMP/config-stopskip.json"
+echo '{"session_rules": false, "store_nudge_every": 1, "skip_prefixes": ["Host internal recap"]}' > "$CFG_STOPSKIP"
+rst; run UserPromptSubmit "real request before internal recap" "$CFG_STOPSKIP" ok "$STUB" "$TMP/stop-intrecap.log" >/dev/null
+check "序列:真实请求Stop拒答续跑" "$(run Stop "" "$CFG_STOPSKIP" ok "$STUB" "$TMP/stop-intrecap.log")" "json:permissionDecision=deny"
+NCAP1="$(calls_n)"
+check "序列:内部Recap静默且零引擎调用" "$(run UserPromptSubmit "Host internal recap of the session" "$CFG_STOPSKIP" ok "$STUB" "$TMP/stop-intrecap.log" >/dev/null; [ "$(calls_n)" = "$NCAP1" ] && echo SAME || echo CALLED)" "含:SAME"
+check "序列:内部Recap后Stop不再deny(未重武装)" "$(run Stop "" "$CFG_STOPSKIP" ok "$STUB" "$TMP/stop-intrecap.log")" "空"
+check "序列:内部Recap未删收尾锁(留痕)" "$(grep -q 'once_latch_skip' "$TMP/stop-intrecap.log" && echo YES)" "含:YES"
+# ---- 复审 R2#3：每会话独立状态文件——B 的更新不回滚 A 的免催凭证，共享 turn_map.json 不复存在 ----
+rst; run UserPromptSubmit "记：session A stores a fact sentence。" "$CFG_STOP" ok "$STUB" "$TMP/stop-ab.log" false "$TURNBASE" sessA >/dev/null
+check "A 会话写回执免催 A" "$(run Stop "" "$CFG_STOP" ok "$STUB" "$TMP/stop-ab.log" false "$TURNBASE" sessA)" "空"
+AKEY="$("$PY3" -c 'import hashlib; print(hashlib.sha1(b"respire-turn-v2:sessA").hexdigest()[:16])')"
+cp "$TURNBASE/st_$AKEY.json" "$TMP/a-snapshot.json" 2>/dev/null
+run UserPromptSubmit "session B new unrelated request" "$CFG_STOP" ok "$STUB" "$TMP/stop-ab.log" false "$TURNBASE" sessB >/dev/null
+check "B 新请求未存应催" "$(run Stop "" "$CFG_STOP" ok "$STUB" "$TMP/stop-ab.log" false "$TURNBASE" sessB)" "json:permissionDecision=deny"
+check "屏障:B 写不影响 A 状态文件(独立文件)" "$(cmp -s "$TURNBASE/st_$AKEY.json" "$TMP/a-snapshot.json" && echo SAME || echo CHANGED)" "含:SAME"
+check "A 仍免催(B 未回滚 A 凭证)" "$(run Stop "" "$CFG_STOP" ok "$STUB" "$TMP/stop-ab.log" false "$TURNBASE" sessA)" "空"
+check "状态按会话独立成文件(共2个)" "$(ls "$TURNBASE" | grep -c '^st_.*\.json$' | tr -d '[:space:]' | grep -qx 2 && echo TWO || echo OTHER)" "含:TWO"
+check "共享 turn_map.json 已移除" "$([ -f "$TURNBASE/turn_map.json" ] && echo PRESENT || echo GONE)" "含:GONE"
+run UserPromptSubmit "session A new request after receipt" "$CFG_STOP" ok "$STUB" "$TMP/stop-ab.log" false "$TURNBASE" sessA >/dev/null
+check "A 新请求后旧回执不免催(请求代绑定,应催)" "$(run Stop "" "$CFG_STOP" ok "$STUB" "$TMP/stop-ab.log" false "$TURNBASE" sessA)" "json:permissionDecision=deny"
 # 状态目录不可写（被同名文件挡住；cygpath 转不动含文件组件的路径，先转 $TMP 再拼）→ 无法落锁 → 放行
 rm -rf "$TMP/not-a-dir"; printf 'x' > "$TMP/not-a-dir"
 rst; check "状态目录不可写放行(绝不无锁deny)" "$(run Stop "" "$CFG_STOP" ok "$STUB" "$TMP/stop-nostate.log" false "$(cygpath -m "$TMP" 2>/dev/null || printf '%s' "$TMP")/not-a-dir/sub")" "空"
@@ -246,6 +275,11 @@ check "pending 保留建议动作merge" "$(run UserPromptSubmit "记：pend rece
 check "坏回执归为unknown" "$(run UserPromptSubmit "记：silent receipt fact sentence。" "$CFG_ON" silent)" "含:store unknown"
 check "unknown 禁止重发" "$(run UserPromptSubmit "记：silent receipt fact sentence。" "$CFG_ON" silent)" "含:Do NOT resend"
 check "unknown 不误报失败" "$(run UserPromptSubmit "记：silent receipt fact sentence。" "$CFG_ON" silent)" "不含:did not accept"
+# ---- 复审 R2#2 反例：show 回 ok 但 details 非 dict → 回读降级 unavailable，不吞已写回执 ----
+check "details为数组不吞Saved回执" "$(run UserPromptSubmit "记：bad details array fact sentence。" "$CFG_ON" show_badetails)" "含:【respire · stored】"
+check "details为数组回执标unavailable" "$(run UserPromptSubmit "记：bad details array fact sentence。" "$CFG_ON" show_badetails)" "含:Read-back unavailable"
+check "details为字符串不吞Saved回执" "$(run UserPromptSubmit "记：bad details string fact sentence。" "$CFG_ON" show_strdetails)" "含:【respire · stored】"
+check "details为字符串不误报失败" "$(run UserPromptSubmit "记：bad details string fact sentence。" "$CFG_ON" show_strdetails)" "不含:did not accept"
 echo "== ② 日志留痕与脱敏 =="
 run SessionStart >/dev/null
 run UserPromptSubmit "我的密码是 password: hunter2 这算敏感吗" >/dev/null

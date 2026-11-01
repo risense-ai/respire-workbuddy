@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.4.5 — 2026-11-01 · 复审第二轮整改（PR #5 复审三项 P2）
+
+### Fixed
+
+- **R2#1 内部提示不得重新武装收尾锁**：`on_prompt` 辨别顺序改为 空检查 → `/nomem`（真实请求：mark 后只跳召回）→ `skip_prefixes` 内部白名单（**命中即返回，不 mark、不删锁、不记请求代**）→ `mark_prompt` → 凭据/快存/召回。修复序列：真实请求→Stop deny→同会话内部 Recap（配置 `skip_prefixes`）→Stop——旧顺序里 Recap 先 `mark_prompt` 删掉收尾锁，宿主未带 `stop_hook_active` 时第二个 Stop 会再次 deny；现在必放行。重复投递同一 UserPromptSubmit 文本无请求身份可去重：保守按新真实请求处理（重武装不额外伤害——锁本就只在无新真实请求时保持）。
+- **R2#2 readback 坏 details 不再吞回执**：`show` 回 `status=ok` 但 `details` 非 dict（数组/字符串）时，旧代码 `(doc.get("details") or {}).get("entry")` 抛 AttributeError，异常冒到主入口被 fail-open 兜成**空输出**——已成功的 Saved 回执凭空消失。现在 `details` 加 `isinstance(dict)` 防护：非 dict 一律局部降级 **unavailable**，保留 Saved 回执与禁止重发约束。
+- **R2#3 会话独立状态文件（删除共享 turn_map.json）**：prompt_ts/store_ts/请求代从共享 `turn_map.json`（读-改-写无锁，temp+rename 原子替换挡不住丢失更新——确定性交错「B 读全 map→A 新请求更新 prompt_ts→B 写回旧快照」会把 A 恢复成旧 `store_ts>=prompt_ts`，本轮没写也误免催）迁至**每会话独立 `st_<sid>.json`**（temp+rename 原子替换，各会话各写各的文件，交错无法构成；超 64 个按 mtime 收敛）。**写回执绑定请求代**：`mark_prompt` 返回本请求代 ts，`mark_store` 记 `store_req_ts`，`turn_stored` 要求 `store_req_ts==prompt_ts`——旧请求延迟到新 prompt 之后完成的写回执不免催新轮。
+
+### Changed
+
+- 测试：CI 29 → 35（+复审点名序列「真实请求→deny→内部 Recap→Stop 放行＋零引擎调用＋重放语义」、坏 details 数组/字符串反例、状态文件单测组×4：确定性交错屏障 B 不回滚 A、多会话并发更新不丢失、旧代写回执跨新 prompt 不免催、每会话一文件无共享 map）；bash 72/0 → 87/0（+R2#1 序列四断言、坏 details 两反例、A/B 会话独立状态文件屏障＋快照不变＋turn_map.json 移除断言、A 新请求后旧回执应催；本机含真机只读分支）；版本三方同步 0.4.5。
+
 ## 0.4.4 — 2026-11-01 · 维护者复审整改（fix/audit-result-contract-stop-failopen 复审 5 项，WB-07~WB-11）
 
 ### Fixed
