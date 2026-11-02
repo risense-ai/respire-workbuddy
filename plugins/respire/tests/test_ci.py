@@ -208,12 +208,15 @@ else: sys.exit(1)
                         PYTHONDONTWRITEBYTECODE='1', PYTHONUTF8='1')
 
     def call(self, prompt='', event='UserPromptSubmit', mode='ok', active=False, every=1,
-             session='s1', fast=False, extra_env=None, list_mode=None, skip=None, generation=None, direct_store=False):
+             session='s1', fast=False, extra_env=None, list_mode=None, skip=None, generation=None, direct_store=False,
+             tool_name='Bash', tool_input=None):
         config = {'rsrs': str(self.engine), 'session_rules': True, 'store_nudge_every': every}
         if skip is not None:
             config['skip_prefixes'] = skip
         self.config.write_text(json.dumps(config), encoding="utf-8")
-        if event == 'Stop':
+        if event == 'PreToolUse':
+            args_seq = []
+        elif event == 'Stop':
             args_seq = []  # R3 终案：Stop 完全不查引擎（空序列=零调用，任何 subprocess 即拒绝）
         elif event == 'SessionStart':
             args_seq = [['status','--json']]
@@ -245,6 +248,8 @@ else: sys.exit(1)
         if list_mode is not None:
             env['STUB_LIST'] = list_mode
         payload = {'prompt':prompt,'hook_event_name':event,'stop_hook_active':active}
+        if event == 'PreToolUse':
+            payload.update(tool_name=tool_name, tool_input=tool_input or {})
         if session is not None:
             payload['session_id'] = session
         if generation is not None:
@@ -273,6 +278,37 @@ else: sys.exit(1)
     def test_normal_input_requires_live_spy(self):
         output = self.positive_control()
         self.assertIn('[0.90] spy', output)
+        before = list(self.recorded())
+        for command in ["rsrs remember fact --force", "rsrs remember 'body --parent dddddddd'",
+                        "rsrs --client-only --json remember fact", "rsrs update deadbeef --clear-parent",
+                        "echo ok; rsrs remember fact", "echo ok\nrsrs remember fact",
+                        "rsrs remember fact --parent none", "rsrs remember fact --parent $P",
+                        ">out rsrs remember fact", "echo $(rsrs remember fact)", "npx rsrs remember fact"]:
+            denied = json.loads(self.call(event="PreToolUse", tool_input={"command": command}))
+            decision = denied["hookSpecificOutput"]
+            self.assertEqual(decision["permissionDecision"], "deny")
+            self.assertNotIn(command, decision["permissionDecisionReason"])
+        self.assertEqual(self.recorded(), before)
+        for command in ["rsrs recall remember --titles --json", "echo hello", "rsrs status --json", "echo 'rsrs remember fact --force'"]:
+            self.assertEqual(self.call(event="PreToolUse", tool_input={"command": command}), "")
+        native = json.loads(self.call(event="PreToolUse", tool_name="respire_remember",
+                                      tool_input={"parent": "dddddddd", "force": True}))
+        self.assertEqual(native["hookSpecificOutput"]["permissionDecision"], "deny")
+        spec = importlib.util.spec_from_file_location("guard_fixture", ROOT / "hooks" / "respire.py")
+        hook = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(hook)
+        good = subprocess.CompletedProcess([], 0, json.dumps({"status": "ok",
+            "summary": {"id": "dddddddddddddddd"}, "details": {"entry": {
+                "id": "dddddddddddddddd", "title": "parent", "content": "parent body"}}}), "")
+        self.assertIsNone(hook.guard_memory_tool("PowerShell", {"command": "rsrs remember fact --parent dddddddd --project p --tags t --type context --summary s"}, lambda parent: True))
+        with mock.patch.object(hook, "run_rsrs", return_value=good) as show:
+            self.assertTrue(hook.parent_exists("fixture", "dddddddd"))
+            show.assert_called_once_with("fixture", ["--client-only", "show", "dddddddd", "--json"], 3)
+        for result in [subprocess.CompletedProcess([], 1, good.stdout, ""), subprocess.CompletedProcess([], 0, "{}", "")]:
+            with mock.patch.object(hook, "run_rsrs", return_value=result):
+                self.assertFalse(hook.parent_exists("fixture", "dddddddd"))
+        with mock.patch.object(hook, "run_rsrs", side_effect=subprocess.TimeoutExpired("fixture", 3)):
+            self.assertFalse(hook.parent_exists("fixture", "dddddddd"))
 
     def test_credential_has_zero_calls_and_no_disclosure(self):
         self.positive_control()

@@ -154,8 +154,8 @@ if mp:
 hooks_cfg = parse_json("hooks/hooks.json")
 if hooks_cfg:
     events = hooks_cfg.get("hooks") or {}
-    allowed = {"SessionStart", "UserPromptSubmit", "Stop"}
-    required = {"SessionStart", "UserPromptSubmit"}   # Stop 存储检查默认不注册（opt-in）
+    allowed = {"SessionStart", "UserPromptSubmit", "PreToolUse", "Stop"}
+    required = {"SessionStart", "UserPromptSubmit", "PreToolUse"}   # Stop 存储检查默认不注册（opt-in）
     if set(events) - allowed:
         fail(f"unexpected events: {sorted(set(events) - allowed)}")
     else:
@@ -192,6 +192,10 @@ try:
 except Exception as e:
     fail(f"respire.py compile: {e}")
 src = read_text("hooks/respire.py")
+if '"permissionDecision": "deny"' not in src or "guard_memory_tool" not in src:
+    fail("PreToolUse must emit a real deny decision")
+else:
+    ok("PreToolUse deny decision present")
 if src and "sys.exit(0)" not in src:
     fail("respire.py must keep fail-open exit 0")
 elif src:

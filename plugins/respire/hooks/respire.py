@@ -3,7 +3,7 @@
 # 与 respire-qoder 同源方案：SessionStart 注简则、UserPromptSubmit 每轮召回、Stop 存储检查；
 # 0.2.0 起并入 qoder 侧演进：宿主内部提示白名单（skip_prefixes）、store: 落库前缀、data_dir、事件名回退。
 # 用法: python3 respire.py <SessionStart|UserPromptSubmit|Stop>   （事件 JSON 走 stdin）
-# 铁律: fail-open —— 任何异常 → 空 stdout、exit 0（协议里即「无决策、放行」），绝不 exit 2。
+# 读钩子 fail-open；PreToolUse 写门失败时返回 deny JSON + exit 0，避免回退链吞掉拒绝。
 #       查询类失败（Stop 的 list）同样放行：记忆层故障不得强迫主任务续跑。
 from __future__ import annotations
 
@@ -16,7 +16,7 @@ import subprocess
 import sys
 import time
 
-VERSION = "0.4.9"
+VERSION = "0.4.10"
 
 # 超时窗（秒）：须盖住 rsrs runtime 冷启动（实测 doctor 模型加载 7s+），否则首轮静默、热后即灵
 RECALL_T = 14
@@ -555,7 +555,7 @@ def do_store(bin_path: str, content: str, cfg: dict, session: str = "", req_ts: 
             lines.extend(f"  {a}" for a in acts)
         else:
             lines.append("Decide: read the candidates above, then merge/attach with the suggested ids, "
-                         "or add --force only if genuinely independent.")
+                         "and leave pending if no real, relevant parent fits. DO NOT use --force.")
         return "\n".join(lines)
 
     # —— 引擎按当前模式拒绝执行（skip：readonly/paused 等，未写也不是失败）——
@@ -898,6 +898,138 @@ def on_prompt(data: dict, cfg: dict, engine) -> str:
     return do_recall(engine, query, cfg)
 
 
+WRITE_BLOCK = ("Respire blocked this memory write. You MUST read rsrs prompt --json, run rsrs candidates "
+               "<content> --json, and read a real, relevant parent body BEFORE writing. "
+               "Important entries MUST have an existing parent. DO NOT use --force, clear a parent, guess, "
+               "or downgrade to trivial. If no parent fits, leave pending. Use one explicit literal rsrs "
+               "command at a time. After a permitted write, you MUST read it back and verify id, title, "
+               "and full content; an unknown result MUST NOT be retried automatically.")
+_PARENT_ID = re.compile(r"(?:[0-9a-f]{8,}|[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12})", re.I)
+
+
+def write_parent_error(args, check_parent):
+    """Only literal options count; a body containing --parent is not an option."""
+    values = {}
+    takes_value = {"--title", "--importance", "--parent", "--content", "--id", "--project",
+                   "--tags", "--type", "--kind", "--summary", "--computer", "--emotion",
+                   "--source-refs", "--valid-until", "--review-at", "--artifact", "--merge-ids",
+                   "--supersedes", "--see-also", "--model-task-id", "--progress-id"}
+    i = 1
+    while i < len(args):
+        token = args[i]
+        key, equal, value = token.partition("=")
+        if key in {"--force", "--clear-parent"}:
+            return WRITE_BLOCK
+        if key in takes_value:
+            if key in values:
+                return WRITE_BLOCK
+            if not equal:
+                i += 1
+                if i >= len(args) or args[i].startswith("--"):
+                    return WRITE_BLOCK
+                value = args[i]
+            values[key] = value
+        elif token in {"--json", "--client-only", "--no-autostart", "--direct", "--clear-summary",
+                       "--clear-source-refs", "--clear-valid-until", "--clear-review-at", "--clear-artifact"}:
+            pass
+        elif token.startswith("-"):
+            return WRITE_BLOCK
+        i += 1
+    parent = values.get("--parent")
+    if args[0] == "remember" and values.get("--importance", "important") != "trivial" and not parent:
+        return WRITE_BLOCK
+    if parent is not None:
+        if not _PARENT_ID.fullmatch(parent) or not check_parent(parent):
+            return WRITE_BLOCK
+    return None
+
+
+def guard_memory_tool(tool_name, args, check_parent):
+    """Guard visible rsrs CLI/native calls without running the requested write."""
+    # shortcut: scripts and aliases are opaque here; Core must guard those write paths.
+    import shlex
+    name = str(tool_name or "")
+    native = re.fullmatch(r"(?:respire_|rsrs_|mcp__[^ ]*(?:respire|rsrs)[^ ]*__)(remember|update)", name, re.I)
+    if native:
+        if not isinstance(args, dict):
+            return WRITE_BLOCK
+        op = native.group(1).lower()
+        if args.get("force") or args.get("clear_parent") or args.get("clearParent"):
+            return WRITE_BLOCK
+        parent = args.get("parent")
+        if op == "remember" and args.get("importance", "important") != "trivial" and not parent:
+            return WRITE_BLOCK
+        if "parent" in args and (not isinstance(parent, str) or not _PARENT_ID.fullmatch(parent)
+                                 or not check_parent(parent)):
+            return WRITE_BLOCK
+        return None
+    if name.lower() not in {"bash", "powershell", "execute_command", "terminal"}:
+        return None
+    command = args.get("command") if isinstance(args, dict) else None
+    if not isinstance(command, str):
+        return None
+    try:
+        lexer = shlex.shlex(command.replace("\n", ";").replace("\r", ";"), posix=True, punctuation_chars=";&|<>()")
+        lexer.escape = ""
+        lexer.whitespace_split = True
+        lexer.commenters = ""
+        tokens = list(lexer)
+    except ValueError:
+        return WRITE_BLOCK if re.search(r"\brsrs(?:-cli)?(?:\.cmd|\.exe)?\b.*\b(?:remember|update)\b", command, re.I | re.S) else None
+    calls = []
+    for i, token in enumerate(tokens[:-1]):
+        executable = token.replace("\\", "/").rsplit("/", 1)[-1].lower()
+        if executable in {"rsrs", "rsrs.cmd", "rsrs.exe", "rsrs-cli", "rsrs-cli.cmd"}:
+            sub = i + 1
+            while sub < len(tokens):
+                flag, equal, value = tokens[sub].partition("=")
+                if flag in {"--json", "--client-only", "--no-autostart", "--direct", "--"}:
+                    sub += 1
+                elif flag in {"--model-task-id", "--progress-id"}:
+                    sub += 1 if equal else 2
+                else:
+                    break
+            if sub >= len(tokens) or tokens[sub] not in {"remember", "update"}:
+                continue
+            # Only command positions (including common explicit launchers) are rsrs execution.
+            if (i == 0 or tokens[i - 1] in {";", "&&", "||", "|", "&", "(", "command", "exec", "npx", "-y", "--yes"}
+                    or (tokens[i - 1] and all(c in ";&|()" for c in tokens[i - 1]))
+                    or (i >= 2 and tokens[i - 2] in {">", ">>", "<"})
+                    or tokens[0].lower() in {"env", "sudo", "nohup", "timeout"}
+                    or all(re.fullmatch(r"[A-Za-z_][A-Za-z_0-9]*=.*", part) for part in tokens[:i])):
+                calls.append((i, sub))
+    if not calls:
+        # Explicit nested shells are visible but not a second shell parser.
+        if tokens and tokens[0].lower() in {"bash", "sh", "pwsh", "powershell", "cmd", "cmd.exe"}:
+            if any(re.search(r"\brsrs(?:-cli)?\b\s+(?:remember|update)\b", token, re.I) for token in tokens[1:]):
+                return WRITE_BLOCK
+        return None
+    if len(calls) != 1 or any(token and all(c in ";&|<>()" for c in token) for token in tokens) or any(c in command for c in "\n\r$`%"):
+        return WRITE_BLOCK
+    start, sub = calls[0]
+    if start and tokens[:start] not in (["npx"], ["npx", "-y"], ["npx", "--yes"], ["command"], ["exec"]):
+        return WRITE_BLOCK
+    return write_parent_error(tokens[sub:], check_parent)
+
+
+def parent_exists(bin_path, parent):
+    if not bin_path:
+        return False
+    try:
+        result = run_rsrs(bin_path, ["--client-only", "show", parent, "--json"], 3)
+        doc = json.loads(result.stdout)
+        entry = doc.get("details", {}).get("entry")
+        summary = doc.get("summary")
+        eid = entry.get("id") if isinstance(entry, dict) else None
+        return (result.returncode == 0 and doc.get("status") == "ok"
+                and isinstance(summary, dict) and summary.get("id") == eid
+                and isinstance(eid, str) and bool(re.fullmatch(
+                    r"[0-9a-f]{16,}|[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}", eid, re.I))
+                and eid.lower().startswith(parent.lower())
+                and isinstance(entry.get("title"), str) and isinstance(entry.get("content"), str))
+    except Exception:
+        return False
+
 def main() -> None:
     try:
         event = (sys.argv[1] if len(sys.argv) > 1 else "") \
@@ -923,6 +1055,13 @@ def main() -> None:
         data, event = {}, ""
 
     try:
+        if event == "PreToolUse":
+            reason = guard_memory_tool(data.get("tool_name"), data.get("tool_input"),
+                                       lambda parent: parent_exists(find_rsrs(load_config()), parent))
+            if reason:
+                print(json.dumps({"hookSpecificOutput": {"hookEventName": "PreToolUse",
+                    "permissionDecision": "deny", "permissionDecisionReason": reason}}))
+            return
         cfg = load_config()
         if not cfg.get("enabled", True):        # 总开关：关闭=全线静默（管理器档）
             log_event(cfg, event or "unknown", "disabled")
@@ -959,7 +1098,8 @@ def main() -> None:
         else:
             out = ""
     except Exception as e:
-        out = ""  # fail-open——但必须留痕，否则「时灵时不灵」无从复盘
+        out = json.dumps({"hookSpecificOutput": {"hookEventName": "PreToolUse",
+            "permissionDecision": "deny", "permissionDecisionReason": WRITE_BLOCK}}) if event == "PreToolUse" else ""
         try:
             log_event(DEFAULTS, event or "unknown", "fatal", f"{type(e).__name__}: {e}")
         except Exception:

@@ -4,6 +4,14 @@
 
 `respire` 是 WorkBuddy 标准内容插件：以命令钩子把 [respire（CLI 名 rsrs）](https://www.npmjs.com/package/rsrs-cli) 记忆引擎挂进 agent 循环——每轮标题档自动召回、「记：」前缀交主模型审查后存储。本地优先、端侧加密、云端 LWW 同步；**不带自定义安装脚本，按 WorkBuddy 插件市场标准安装**。
 
+## 写前拦截
+
+`PreToolUse` 在 WorkBuddy 执行工具前检查 Bash、PowerShell、execute_command 与可见的 rsrs/respire 写工具。important 新条缺父节点、强写、清空父节点，以及父节点无效或核验超时，都会收到 `permissionDecision: deny`，命令不会执行。父节点只读核验使用 `--client-only show --json`，上限 3 秒；拒绝以 JSON 和退出码 0 返回，避免 Python 回退链吞掉结果。
+
+当前 CLI 的 `update` 未公开 `--parent` / `--clear-parent`；钩子拒绝这些参数属于协议防御，不代表已经验证 CLI 能执行清父操作。将无父节点的 trivial 条目升级为 important，仍由 CLI/Core 写前门检查。
+
+复合或动态的已识别写命令必须拆成单条明确命令。普通读取与其他工具不受影响。任意脚本、别名和外部进程超出插件可见范围，仍须由 CLI/Core 的写前门兜底；插件不自动选父节点，也不代写。
+
 ## 数据存储安全
 
 1. **可离线使用**：记忆库是本机本地库，新配置即离线模式——不联网、不注册、不登录，召回与落库照常；离线期间的写入留在本地队列不丢，联网登录后随 autosync 自动补同步。

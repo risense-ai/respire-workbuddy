@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.4.10 — 2026-11-02
+
+- 注册真实 `PreToolUse` 写前门，使用 WorkBuddy 的 `permissionDecision: deny` 拒绝危险的可见 rsrs 写入。
+- important 新条必须有可只读核验的父节点；禁止 force、清父节点，且不可解析写入不再静默放行。
+- 拒绝返回 JSON 和退出码 0；保留普通读取与其他工具，并说明 CLI/Core 兜底边界。
+
 ## 0.4.9 — 2026-11-02
 
 - Explicit memory prefixes return pending without any engine write.
