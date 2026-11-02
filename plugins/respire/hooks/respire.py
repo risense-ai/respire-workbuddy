@@ -3,7 +3,7 @@
 # 与 respire-qoder 同源方案：SessionStart 注简则、UserPromptSubmit 每轮召回、Stop 存储检查；
 # 0.2.0 起并入 qoder 侧演进：宿主内部提示白名单（skip_prefixes）、store: 落库前缀、data_dir、事件名回退。
 # 用法: python3 respire.py <SessionStart|UserPromptSubmit|Stop>   （事件 JSON 走 stdin）
-# 铁律: fail-open —— 任何异常 → 空 stdout、exit 0（协议里即「无决策、放行」），绝不 exit 2。
+# 读钩子 fail-open；PreToolUse 写门失败时返回 deny JSON + exit 0，避免回退链吞掉拒绝。
 #       查询类失败（Stop 的 list）同样放行：记忆层故障不得强迫主任务续跑。
 from __future__ import annotations
 
@@ -16,7 +16,7 @@ import subprocess
 import sys
 import time
 
-VERSION = "0.4.9"
+VERSION = "0.4.10"
 
 # 超时窗（秒）：须盖住 rsrs runtime 冷启动（实测 doctor 模型加载 7s+），否则首轮静默、热后即灵
 RECALL_T = 14
@@ -555,7 +555,7 @@ def do_store(bin_path: str, content: str, cfg: dict, session: str = "", req_ts: 
             lines.extend(f"  {a}" for a in acts)
         else:
             lines.append("Decide: read the candidates above, then merge/attach with the suggested ids, "
-                         "or add --force only if genuinely independent.")
+                         "and leave pending if no real, relevant parent fits. DO NOT use --force.")
         return "\n".join(lines)
 
     # —— 引擎按当前模式拒绝执行（skip：readonly/paused 等，未写也不是失败）——
@@ -898,6 +898,204 @@ def on_prompt(data: dict, cfg: dict, engine) -> str:
     return do_recall(engine, query, cfg)
 
 
+WRITE_BLOCK = ("Respire blocked this memory write. You MUST read rsrs prompt --json, run rsrs candidates "
+               "<content> --json, and read a real, relevant parent body BEFORE writing. "
+               "Important entries MUST have an existing parent. DO NOT use --force, clear a parent, guess, "
+               "or downgrade to trivial. If no parent fits, leave pending. Use one explicit literal rsrs "
+               "command at a time. After a permitted write, you MUST read it back and verify id, title, "
+               "and full content; an unknown result MUST NOT be retried automatically.")
+_PARENT_ID = re.compile(r"(?:[0-9a-f]{8,}|[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12})", re.I)
+
+
+def write_parent_error(args, check_parent, check_update=None):
+    """Parse actual CLI options; content cannot supply a parent."""
+    if "--help" in args[1:] or "-h" in args[1:]:
+        return None
+    values, positional = {}, []
+    takes_value = {"--title", "--importance", "--parent", "--content", "--id", "--project",
+                   "--tags", "--type", "--kind", "--summary", "--computer", "--emotion",
+                   "--source-refs", "--valid-until", "--review-at", "--artifact", "--merge-ids",
+                   "--supersedes", "--see-also", "--model-task-id", "--progress-id"}
+    i = 1
+    while i < len(args):
+        token = args[i]
+        key, equal, value = token.partition("=")
+        if key in {"--force", "--clear-parent"}:
+            return WRITE_BLOCK
+        if key in takes_value:
+            if key in values:
+                return WRITE_BLOCK
+            if not equal:
+                i += 1
+                if i >= len(args) or args[i].startswith("--"):
+                    return WRITE_BLOCK
+                value = args[i]
+            values[key] = value
+        elif token in {"--json", "--client-only", "--no-autostart", "--direct", "--clear-summary",
+                       "--clear-source-refs", "--clear-valid-until", "--clear-review-at", "--clear-artifact"}:
+            pass
+        elif token.startswith("-"):
+            return WRITE_BLOCK
+        else:
+            positional.append(token)
+        i += 1
+    parent = values.get("--parent")
+    if args[0] == "remember":
+        needs_parent = values.get("--importance", "trivial") != "trivial" or "--merge-ids" in values
+        if needs_parent and not parent:
+            return WRITE_BLOCK
+    if parent is not None:
+        if not _PARENT_ID.fullmatch(parent) or not check_parent(parent):
+            return WRITE_BLOCK
+    if args[0] == "update" and values.get("--importance") == "important":
+        if not positional or check_update is None or not check_update(positional[0]):
+            return WRITE_BLOCK + " The target needs an existing valid parent; review and attach it before promoting it."
+    return None
+
+
+def guard_memory_tool(tool_name, args, check_parent, check_update=None, provider_tool=False, _wrapped=False):
+    """Guard visible rsrs CLI/native calls without running the requested write."""
+    # shortcut: scripts and aliases are opaque here; Core must guard those write paths.
+    import shlex
+    name = str(tool_name or "")
+    known = re.fullmatch(r"(?:(?:respire|rsrs|memory)_|mcp__[^\s]*(?:respire|rsrs|memory)[^\s]*__)(?:memory_)?(remember|update)", name, re.I)
+    if known:
+        if not (provider_tool and name == "respire_remember"):
+            return WRITE_BLOCK + " This tool's memory store is not bound to the configured CLI. Use an explicit rsrs CLI command instead."
+        if not isinstance(args, dict):
+            return WRITE_BLOCK
+        if args.get("force") or args.get("clear_parent") or args.get("clearParent"):
+            return WRITE_BLOCK
+        parent = args.get("parent")
+        if args.get("importance", "important") != "trivial" and not parent:
+            return WRITE_BLOCK
+        if "parent" in args and (not isinstance(parent, str) or not _PARENT_ID.fullmatch(parent)
+                                 or not check_parent(parent)):
+            return WRITE_BLOCK
+        return None
+    if name.lower() not in {"bash", "powershell", "execute_command", "terminal"}:
+        return None
+    command = args.get("command") if isinstance(args, dict) else None
+    if not isinstance(command, str):
+        return None
+    # Keep operator provenance: a quoted ">" or "%" is memory content, not shell syntax.
+    pattern = r"""(?:'[^']*'|"(?:\\.|[^"\\])*"|\\[^\r\n]|[^\s;&|<>()'"\\])+|[;&|<>()]+|[\r\n]+"""
+    parts, cursor, malformed = [], 0, False
+    for match in re.finditer(pattern, command):
+        if command[cursor:match.start()].strip():
+            malformed = True
+            break
+        raw = match.group()
+        operator = raw[0] in ";&|<>()\r\n"
+        if operator:
+            parts.append((";" if raw[0] in "\r\n" else raw, True, False))
+        else:
+            try:
+                lexer = shlex.shlex(raw, posix=True)
+                lexer.whitespace_split, lexer.commenters = True, ""
+                if re.match(r"""^['"]?[A-Za-z]:[\\/]""", raw):
+                    lexer.escape = ""
+                word = "".join(lexer)
+            except ValueError:
+                malformed = True
+                break
+            expanded = re.sub(r"'[^']*'", "", raw)
+            dynamic = bool(re.search(r"\$(?:[A-Za-z_0-9{(?@*!#-])|\x60|%[A-Za-z_][A-Za-z_0-9]*%", expanded))
+            parts.append((word, False, dynamic))
+        cursor = match.end()
+    malformed = malformed or bool(command[cursor:].strip())
+    tokens, redirected = [], False
+    i = 0
+    while i < len(parts):
+        word, operator, dynamic = parts[i]
+        if not operator and word.isdigit() and i + 1 < len(parts) and parts[i + 1][1] and any(c in parts[i + 1][0] for c in "<>"):
+            i += 1
+            continue
+        if operator and any(c in word for c in "<>"):
+            redirected = True
+            i += 2  # Discard only the real redirection operator and its target.
+            continue
+        tokens.append((word, operator, dynamic))
+        i += 1
+    words = [part[0] for part in tokens]
+    calls = []
+    for i, (word, operator, dynamic) in enumerate(tokens[:-1]):
+        executable = word.replace("\\", "/").rsplit("/", 1)[-1].lower()
+        if operator or executable not in {"rsrs", "rsrs.cmd", "rsrs.exe", "rsrs-cli", "rsrs-cli.cmd", "rsrs-cli.exe"}:
+            continue
+        sub = i + 1
+        while sub < len(words):
+            flag, equal, value = words[sub].partition("=")
+            if flag in {"--json", "--client-only", "--no-autostart", "--direct", "--"}:
+                sub += 1
+            elif flag in {"--model-task-id", "--progress-id"}:
+                sub += 1 if equal else 2
+            else:
+                break
+        if sub >= len(words) or words[sub] not in {"remember", "update"}:
+            continue
+        if (i == 0 or tokens[i - 1][1] or words[i - 1] in {"command", "exec", "npx", "-y", "--yes"}
+                or words[0].lower() in {"env", "sudo", "nohup", "timeout"}
+                or all(re.fullmatch(r"[A-Za-z_][A-Za-z_0-9]*=.*", value) for value in words[:i])):
+            calls.append((i, sub))
+    if not calls:
+        # Inspect only explicit shell bodies and command substitutions; never run them.
+        nested = []
+        if words and words[0].lower() in {"bash", "sh", "pwsh", "powershell", "cmd", "cmd.exe"}:
+            nested.extend(words[1:])
+        for word, operator, dynamic in parts:
+            if dynamic:
+                nested.extend(re.findall(r"\$\((.*?)\)", word, re.S))
+        if name.lower() != "powershell":
+            expanded = re.sub(r"'[^']*'", "", command)
+            nested.extend(re.findall(r"(?<!\\)\x60(.*?)(?<!\\)\x60", expanded, re.S))
+        for body in nested:
+            if guard_memory_tool(tool_name, {"command": body}, check_parent, check_update, _wrapped=True):
+                return WRITE_BLOCK
+        return None
+    if _wrapped:
+        if len(calls) == 1 and any(flag in words[calls[0][1] + 1:] for flag in ("--help", "-h")):
+            return None
+        return WRITE_BLOCK
+    if len(calls) != 1 or malformed or redirected or any(operator or dynamic for _, operator, dynamic in tokens):
+        return WRITE_BLOCK
+    start, sub = calls[0]
+    if start and words[:start] not in (["npx"], ["npx", "-y"], ["npx", "--yes"], ["command"], ["exec"]):
+        return WRITE_BLOCK
+    return write_parent_error(words[sub:], check_parent, check_update)
+
+
+def read_guard_entry(bin_path, entry_id):
+    if not bin_path or not isinstance(entry_id, str) or not _PARENT_ID.fullmatch(entry_id):
+        return None
+    try:
+        result = run_rsrs(bin_path, ["--client-only", "show", entry_id, "--json"], 3)
+        doc = json.loads(result.stdout)
+        entry = doc.get("details", {}).get("entry")
+        summary = doc.get("summary")
+        eid = entry.get("id") if isinstance(entry, dict) else None
+        if (result.returncode == 0 and doc.get("status") == "ok"
+                and isinstance(summary, dict) and summary.get("id") == eid
+                and isinstance(eid, str) and bool(re.fullmatch(
+                    r"[0-9a-f]{16,}|[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}", eid, re.I))
+                and eid.lower().startswith(entry_id.lower())
+                and isinstance(entry.get("title"), str) and isinstance(entry.get("content"), str)):
+            return entry
+    except Exception:
+        pass
+    return None
+
+
+def parent_exists(bin_path, parent):
+    return read_guard_entry(bin_path, parent) is not None
+
+
+def update_parent_exists(bin_path, entry_id):
+    entry = read_guard_entry(bin_path, entry_id)
+    parent = entry.get("parent_id") if entry else None
+    return (isinstance(parent, str) and parent.lower() != entry["id"].lower()
+            and parent_exists(bin_path, parent))
+
 def main() -> None:
     try:
         event = (sys.argv[1] if len(sys.argv) > 1 else "") \
@@ -923,6 +1121,14 @@ def main() -> None:
         data, event = {}, ""
 
     try:
+        if event == "PreToolUse":
+            reason = guard_memory_tool(data.get("tool_name"), data.get("tool_input"),
+                                       lambda parent: parent_exists(find_rsrs(load_config()), parent),
+                                       lambda target: update_parent_exists(find_rsrs(load_config()), target))
+            if reason:
+                print(json.dumps({"hookSpecificOutput": {"hookEventName": "PreToolUse",
+                    "permissionDecision": "deny", "permissionDecisionReason": reason}}))
+            return
         cfg = load_config()
         if not cfg.get("enabled", True):        # 总开关：关闭=全线静默（管理器档）
             log_event(cfg, event or "unknown", "disabled")
@@ -959,7 +1165,8 @@ def main() -> None:
         else:
             out = ""
     except Exception as e:
-        out = ""  # fail-open——但必须留痕，否则「时灵时不灵」无从复盘
+        out = json.dumps({"hookSpecificOutput": {"hookEventName": "PreToolUse",
+            "permissionDecision": "deny", "permissionDecisionReason": WRITE_BLOCK}}) if event == "PreToolUse" else ""
         try:
             log_event(DEFAULTS, event or "unknown", "fatal", f"{type(e).__name__}: {e}")
         except Exception:

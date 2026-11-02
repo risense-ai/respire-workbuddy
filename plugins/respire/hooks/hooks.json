@@ -37,6 +37,18 @@
           }
         ]
       }
+    ],
+    "PreToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CODEBUDDY_PLUGIN_ROOT}/hooks/respire.py\" PreToolUse || python \"${CODEBUDDY_PLUGIN_ROOT}/hooks/respire.py\" PreToolUse || py -3 \"${CODEBUDDY_PLUGIN_ROOT}/hooks/respire.py\" PreToolUse",
+            "timeout": 8,
+            "statusMessage": "respire: checking memory write"
+          }
+        ]
+      }
     ]
   }
 }
