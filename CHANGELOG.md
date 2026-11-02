@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.4.9 — 2026-11-02
+
+- Explicit memory prefixes return pending without any engine write.
+- Require engine policy, same-topic candidate bodies, and update > merge > attach > new; new important records need a reviewed reasonable parent, otherwise stay pending without force or importance downgrade.
+- Keep actual write receipt unknown/no-retry coverage separate from live prefix checks.
+
 ## 0.4.8 — 2026-11-01 · 第五轮：generation-scoped 锁文件（原子 claim 终案）
 
 ### Fixed

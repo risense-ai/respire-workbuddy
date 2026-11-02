@@ -17,7 +17,7 @@ The CLI is `rsrs` (npm package `rsrs-cli`; `@rsrsai/cli` is the same CLI). The m
 | Purpose | Command | Key parameters |
 | --- | --- | --- |
 | Semantic recall | `rsrs recall "<project name + keywords>" --limit 5 --json` | `--titles` for short id + title only; `--limit N` for count |
-| Store | `rsrs remember "<content>" --title "<fact sentence>" --importance important --json` | `--parent <id>` attaches under a record; `--merge-ids "a,b"` merges; `--force` skips dedup |
+| Store | `rsrs remember "<content>" --title "<fact sentence>" --importance important --parent <reviewed-parent-id> --json` | `--parent <id>` attaches under a record; `--merge-ids "a,b"` merges; new important records require a reviewed reasonable parent; no force bypass |
 | Read full body | `rsrs show <short-id> --json` | short id = first 8 chars |
 | Causal chain | `rsrs chain <id> --depth 3 --json` | ancestors + record + descendants in one call |
 | Dedup candidates | `rsrs candidates "<content>" --json` | check same-subject records before storing |
@@ -31,7 +31,7 @@ The CLI is `rsrs` (npm package `rsrs-cli`; `@rsrsai/cli` is the same CLI). The m
 ## Common flows
 
 1. **Before answering**: `recall` with 2–3 different wordings (synonyms, hypernyms, English); on hits, `show` the full body before citing it.
-2. **Storing**: run `candidates` for dedup first → same subject with changed facts, use `rsrs update <id> --content/--title`; multiple scattered same-subject records, use `remember --merge-ids`; only genuinely new facts get `remember --parent <attach-id>`.
+2. **Storing**: Before any memory write, you MUST read rsrs prompt, recall same-topic candidates, and use rsrs show <id> to read their full bodies. Apply update > merge > attach > new in that order; use the existing CLI for updates/merges. A new important record MUST have a real, reasonable parent whose full body you have read. ONLY AFTER that review may you use rsrs remember with --importance important --parent <id>; if no such parent is available, remain pending. DO NOT guess a parent, use --force, or downgrade importance to bypass this requirement. DO NOT write in read-only/off mode or change that mode to enable a write. Use literal body markers required by engine policy; DO NOT translate them. The title MUST be a complete subject + action + result fact sentence. After an actual write, you MUST use rsrs show to verify the id, title, and full body. If the actual write outcome is unknown, DO NOT retry automatically or claim success. Verify read-only; DO NOT resend the write.
 3. **Organizing**: `rsrs tree --outline --json` to view the tree → `rsrs resort --spec '{\"ops\":[{\"id\":\"child\",\"parent\":\"parent\"}]}' --go` to re-attach in bulk (dry-run by default).
 
 ## Return envelope
@@ -40,7 +40,7 @@ All `--json` commands return `{status, summary, items, details, errors}`:
 
 - Failures are `status:"fail"` plus `errors[]`, and the exit code may still be 0 — **judge by status, not the exit code**.
 - recall hits live in `details[]`: `score` (relevance, not confidence), `id` (full id), `title`, `superseded_by`.
-- remember has three states: `ok` = written (`summary.id`); `pending` plus `written:false` = a similar record was found and **nothing was written** — attach with `--parent` or force with `--force`; anything else is a failure.
+- ok/warn with a valid id means written; DO NOT resend. Pending means nothing was written. If an actual write outcome is unknown, DO NOT resend or claim success; verify read-only.
 
 ## Red lines
 
