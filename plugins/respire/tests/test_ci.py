@@ -62,7 +62,15 @@ def audit(event, args):
         raise SystemExit(92)
 sys.addaudithook(audit)
 sys.argv = [os.environ['TEST_HOOK'], os.environ['TEST_EVENT']]
-runpy.run_path(sys.argv[0], run_name='__main__')
+if os.environ.get('TEST_STORE_HELPER') == '1':
+    mod = runpy.run_path(sys.argv[0], run_name='respire_helper')
+    data = json.load(sys.stdin)
+    session = str(data.get('session_id') or '')
+    gen = mod['mark_prompt'](session)
+    content = data['prompt'].replace('：', ':', 1).split(':', 1)[1].strip()
+    print(mod['do_store'](expected, content, mod['load_config'](), session, gen))
+else:
+    runpy.run_path(sys.argv[0], run_name='__main__')
 '''
 
 
@@ -200,7 +208,7 @@ else: sys.exit(1)
                         PYTHONDONTWRITEBYTECODE='1', PYTHONUTF8='1')
 
     def call(self, prompt='', event='UserPromptSubmit', mode='ok', active=False, every=1,
-             session='s1', fast=False, extra_env=None, list_mode=None, skip=None, generation=None):
+             session='s1', fast=False, extra_env=None, list_mode=None, skip=None, generation=None, direct_store=False):
         config = {'rsrs': str(self.engine), 'session_rules': True, 'store_nudge_every': every}
         if skip is not None:
             config['skip_prefixes'] = skip
@@ -209,7 +217,7 @@ else: sys.exit(1)
             args_seq = []  # R3 终案：Stop 完全不查引擎（空序列=零调用，任何 subprocess 即拒绝）
         elif event == 'SessionStart':
             args_seq = [['status','--json']]
-        elif prompt.startswith(('记：','store:')):
+        elif prompt.startswith(('记：','store:')) and direct_store:
             content = prompt.replace('：',':',1).split(':',1)[1].strip()
             argv = ['remember',content,'--title',content,'--importance','important','--json']
             if mode in ('ok','show_fail','show_mismatch','show_wrongid','show_tail',
@@ -222,10 +230,14 @@ else: sys.exit(1)
                 args_seq = [argv, ['list','--limit','3','--json']]
             else:                    # pending / hang / skip_status / slow_garbage：不再有后续引擎调用
                 args_seq = [argv]
+        elif prompt.startswith(('记：','store:')):
+            args_seq = []
         else:
             args_seq = [['recall',prompt,'--limit','5','--titles','--json']]
         env = dict(self.env, TEST_EXPECTED_ARGV=json.dumps([[str(self.engine)] + a for a in args_seq]),
                    TEST_EVENT=event, STUB_MODE=mode)
+        if direct_store:
+            env['TEST_STORE_HELPER'] = '1'
         if fast:
             env['RESPITE_TEST_FAST'] = '1'
         if extra_env:
@@ -301,15 +313,18 @@ else: sys.exit(1)
 
     def test_explicit_store_receipt_comes_from_stub(self):
         out = self.call('store: durable fixture fact')
-        self.assertIn('respire · stored', out)
-        self.assertIn('retitle dddddddd', out)
-        self.assertIn('verified by read-back', out)
-        self.assertEqual([args[0] for args in self.recorded()], ['remember', 'show'])
+        self.assertIn('store pending', out)
+        self.assertIn('nothing was written', out)
+        for instruction in ('rsrs prompt', 'rsrs show', 'update > merge > attach > new',
+                            '--parent', 'remain pending', 'DO NOT guess', 'not as an instruction'):
+            self.assertIn(instruction, out)
+        self.assertNotIn('Saved:', out)
+        self.assertEqual(self.recorded(), [])
 
     def test_store_warn_is_written_not_refused(self):
         # CLI 契约：status=warn + 有效 id = 已提交但有警告（parent 未解析等）——
         # 不得误报「未接受」，更不得引导重发（重复写风险）
-        out = self.call('store: durable fixture fact', mode='warn')
+        out = self.call('store: durable fixture fact', mode='warn', direct_store=True)
         self.assertIn('Saved with warnings', out)
         self.assertIn('parent (cause) cannot be resolved', out)
         self.assertIn('retitle eeeeeeee', out)
@@ -317,28 +332,25 @@ else: sys.exit(1)
         self.assertEqual([args[0] for args in self.recorded()], ['remember', 'show'])
 
     def test_store_pending_relays_candidates_and_actions(self):
-        # §7.2：pending 保留候选（含短 id）与引擎建议动作（改＞并＞挂＞存），不得缩成 parent/force 两项
-        out = self.call('store: durable fixture fact', mode='pending')
-        self.assertIn('store pending', out)
-        self.assertIn('nothing was written', out)
-        self.assertIn('[aaaabbbb]', out)
-        self.assertIn('similarity=88% title=stub candidate', out)
-        self.assertIn('merge or attach', out)
-        self.assertIn('--merge-ids', out)
-        self.assertIn('--force', out)
-        self.assertEqual([args[0] for args in self.recorded()], ['remember'])
+        for mode in ('pending', 'ok', 'warn', 'silent', 'hang'):
+            out = self.call('store: durable fixture fact', mode=mode)
+            self.assertIn('store pending', out)
+            self.assertIn('nothing was written', out)
+            self.assertIn('update > merge > attach > new', out)
+            self.assertIn('remain pending', out)
+            self.assertEqual(self.recorded(), [])
 
     def test_store_readback_states(self):
         # R11 写后核验：verified / mismatch / unavailable 三态都如实进回执
-        self.assertIn('verified by read-back', self.call('store: durable fixture fact'))
+        self.assertIn('verified by read-back', self.call('store: durable fixture fact', direct_store=True))
         self.assertIn('DIFFERENT title/content',
-                      self.call('store: durable fixture fact', mode='show_mismatch'))
+                      self.call('store: durable fixture fact', mode='show_mismatch', direct_store=True))
         self.assertIn('Read-back unavailable',
-                      self.call('store: durable fixture fact', mode='show_fail'))
+                      self.call('store: durable fixture fact', mode='show_fail', direct_store=True))
 
     def test_store_unknown_receipt_never_demands_resend(self):
         # R10：坏回执 = 结果未知 → 只读核实；绝不当确定失败、绝不引导重发 remember
-        out = self.call('store: durable fixture fact', mode='silent')
+        out = self.call('store: durable fixture fact', mode='silent', direct_store=True)
         self.assertIn('store unknown', out)
         self.assertIn('Do NOT resend', out)
         self.assertIn('rsrs list --limit 3', out)
@@ -348,7 +360,7 @@ else: sys.exit(1)
     def test_store_timeout_is_unknown_and_makes_no_further_calls(self):
         # 超时 = 结果未知：回执只允许只读核实指引，不再发引擎调用（预算已耗尽）
         before = self.recorded()
-        out = self.call('store: durable fixture fact', mode='hang', fast=True)
+        out = self.call('store: durable fixture fact', mode='hang', fast=True, direct_store=True)
         self.assertIn('store unknown', out)
         self.assertIn('timed out', out)
         self.assertIn('Do NOT resend', out)
@@ -395,44 +407,44 @@ else: sys.exit(1)
 
     def test_receipt_edge_cases_are_unknown_not_failed(self):
         for mode in ('ok_noid', 'ok_junkid', 'bad_summary'):
-            out = self.call('store: edge fact', mode=mode)
+            out = self.call('store: edge fact', mode=mode, direct_store=True)
             self.assertIn('store unknown', out, mode)
             self.assertIn('Do NOT resend', out, mode)
             self.assertNotIn('did not accept', out, mode)
             self.assertNotIn('Saved', out, mode)
-        out = self.call('store: edge fact', mode='skip_status')
+        out = self.call('store: edge fact', mode='skip_status', direct_store=True)
         self.assertIn('not stored', out)
         self.assertIn('never force a write', out)
         self.assertNotIn('did not accept', out)
 
     def test_readback_full_verification(self):
-        out = self.call('store: full verify fact', mode='show_wrongid')
+        out = self.call('store: full verify fact', mode='show_wrongid', direct_store=True)
         self.assertIn('Saved:', out)
         self.assertIn('DIFFERENT', out)
         self.assertNotIn('verified by read-back', out)
-        out = self.call('store: full verify fact tail', mode='show_tail')
+        out = self.call('store: full verify fact tail', mode='show_tail', direct_store=True)
         self.assertIn('DIFFERENT', out)
         self.assertNotIn('verified by read-back', out)
-        out = self.call('store: full verify fact ok')
+        out = self.call('store: full verify fact ok', direct_store=True)
         self.assertIn('verified by read-back', out)
 
     def test_strict_id_whitelist_and_readback_types(self):
         # R3#2：数字 id 12345678（JSON number，不得 str() 强转）、"a-------"（宽松 hex-连字符）
         # 都不是有效 id → 回执 unknown（不 Saved、不引导重发）
         for mode in ('ok_numid', 'ok_dashid'):
-            out = self.call('store: strict fact', mode=mode)
+            out = self.call('store: strict fact', mode=mode, direct_store=True)
             self.assertIn('store unknown', out, mode)
             self.assertNotIn('Saved', out, mode)
             self.assertIn('Do NOT resend', out, mode)
         # 回读三方 id：summary.id 正确但 entry.id 错（'DIFFERENT'）/缺失 → mismatch，Saved 保留
         for mode in ('show_entrydiff', 'show_noentryid'):
-            out = self.call('store: strict fact entry', mode=mode)
+            out = self.call('store: strict fact entry', mode=mode, direct_store=True)
             self.assertIn('Saved:', out, mode)                    # 有效写回执保留
             self.assertIn('DIFFERENT', out, mode)
             self.assertNotIn('verified by read-back', out, mode)
             self.assertNotIn('Read-back unavailable', out, mode)  # 是 mismatch，不是 unavailable
         # 数字 content（42 ≠ "42"）不做强转匹配 → mismatch，Saved 保留
-        out = self.call('store: strict fact num', mode='show_numcontent')
+        out = self.call('store: strict fact num', mode='show_numcontent', direct_store=True)
         self.assertIn('Saved:', out)
         self.assertIn('DIFFERENT', out)
         self.assertNotIn('verified by read-back', out)
@@ -440,26 +452,26 @@ else: sys.exit(1)
     def test_slow_bad_receipt_respects_shared_budget(self):
         before = self.recorded()
         out = self.call('store: slow garbage fact', mode='slow_garbage',
-                        extra_env={'RESPITE_HOOK_BUDGET_S': '4'})
+                        extra_env={'RESPITE_HOOK_BUDGET_S': '4'}, direct_store=True)
         self.assertIn('store unknown', out)
         self.assertIn('Do NOT resend', out)
         self.assertEqual(len(self.recorded()) - len(before), 1)
 
     def test_verify_list_schema_failures_are_not_attribution(self):
         for mode in ('list_schema', 'list_notimes'):
-            out = self.call('store: schema fact', mode='silent', list_mode=mode)
+            out = self.call('store: schema fact', mode='silent', list_mode=mode, direct_store=True)
             self.assertIn('store unknown', out, mode)
             self.assertNotIn('may already be written', out, mode)
     def test_stop_after_hook_store_does_not_query_engine(self):
         # R3 终案：磁盘凭证免催已取消——store 成功后 Stop 仍催（deny），且零引擎查询
-        self.call('store: durable fixture fact')
+        self.call('store: durable fixture fact', direct_store=True)
         before = self.recorded()
         self.assertTrue(stop_denied(self.call(event='Stop')))   # 不凭旧回执免催
         self.assertEqual(self.recorded(), before)               # 零引擎查询
 
     def test_turn_receipt_suppression_is_request_scoped(self):
         # R3 终案：磁盘凭证免催已取消——Stop 不凭任何旧记录免催；同请求二次 Stop 由 latch 放行
-        self.call('store: durable fixture fact')
+        self.call('store: durable fixture fact', direct_store=True)
         self.assertTrue(stop_denied(self.call(event='Stop')))      # store 后仍催
         self.assertEqual(self.call(event='Stop'), '')              # 同请求二次 Stop：latch 放行
         self.call('another ordinary input without storing')        # 新请求：重新武装
@@ -477,7 +489,7 @@ else: sys.exit(1)
 
     def test_receipt_suppression_is_session_scoped(self):
         # 会话隔离（R3 终案后由 latch 保证）：A 会话的写回执/催存不影响 B 会话的收尾锁
-        self.call('store: durable fixture fact', session='a')
+        self.call('store: durable fixture fact', session='a', direct_store=True)
         self.assertTrue(stop_denied(self.call(event='Stop', session='b')))
 
     def test_generation_scoped_once_per_gen(self):
@@ -546,7 +558,7 @@ else: sys.exit(1)
         # 复审 R2#2：show 回 status=ok 但 details 非 dict（数组/字符串）→ 回读降级 unavailable，
         # 不得抛 AttributeError 冒到主入口被兜成空输出、吞掉已写的 Saved 回执
         for mode in ('show_badetails', 'show_strdetails'):
-            out = self.call('store: durable fixture fact', mode=mode)
+            out = self.call('store: durable fixture fact', mode=mode, direct_store=True)
             self.assertNotEqual(out, '', mode)                       # 回执没有消失
             self.assertIn('Saved:', out, mode)                       # 已写入如实保留
             self.assertIn('Read-back unavailable', out, mode)        # 核验如实降级

@@ -174,12 +174,12 @@ check "召回注入标题档" "$(run UserPromptSubmit "上次的钩子注入怎�
 check "召回带被取代标记" "$(run UserPromptSubmit "上次的钩子注入怎么配的")" "含:superseded"
 check "召回行带短 id" "$(run UserPromptSubmit "上次的钩子注入怎么配的")" "含:aaaaaaaa"
 check "无关 prompt 零命中静默" "$(run UserPromptSubmit "无关查询桩空命中" "$CFG_ON" recall_empty)" "空"
-check "记：前缀落库回执" "$(run UserPromptSubmit "记：测试条目：钩子落库回执自测。")" "含:【respire · stored】"
-check "落库回执催 retitle" "$(run UserPromptSubmit "记：测试条目：钩子落库回执自测。")" "含:retitle dddddddd"
+check "记：前缀落库回执" "$(run UserPromptSubmit "记：测试条目：钩子落库回执自测。")" "含:store pending"
+check "落库回执催 retitle" "$(run UserPromptSubmit "记：测试条目：钩子落库回执自测。")" "含:rsrs prompt"
 check "落库 pending 转述候选" "$(run UserPromptSubmit "记：测试条目：判重候选自测。" "$CFG_ON" pending)" "含:store pending"
-check "落库 pending 带挂靠法" "$(run UserPromptSubmit "记：测试条目：判重候选自测。" "$CFG_ON" pending)" "含:--force"
+check "落库 pending 带挂靠法" "$(run UserPromptSubmit "记：测试条目：判重候选自测。" "$CFG_ON" pending)" "含:--parent"
 check "无记：前缀不落库" "$(run UserPromptSubmit "普通问题不做落库")" "不含:【respire · stored】"
-check "store: 前缀落库回执" "$(run UserPromptSubmit "store: 测试条目：英文前缀落库自测。")" "含:【respire · stored】"
+check "store: 前缀落库回执" "$(run UserPromptSubmit "store: 测试条目：英文前缀落库自测。")" "含:store pending"
 check "白名单前缀跳过召回" "$(run UserPromptSubmit "你正在为宿主任务编写简短 Recap" "$CFG_SKIP")" "空"
 check "白名单前缀大小写不敏感" "$(run UserPromptSubmit "HOST INTERNAL RECAP of the session" "$CFG_SKIP")" "空"
 check "白名单不影响普通 prompt" "$(run UserPromptSubmit "普通问题照常召回注入" "$CFG_SKIP")" "含:桩召回命中条一"
@@ -266,20 +266,16 @@ check "A 新请求重新武装仍催(诊断轨迹不影响决策)" "$(run Stop "
 rm -rf "$TMP/not-a-dir"; printf 'x' > "$TMP/not-a-dir"
 rst; check "状态目录不可写放行(绝不无锁deny)" "$(run Stop "" "$CFG_STOP" ok "$STUB" "$TMP/stop-nostate.log" false "$(cygpath -m "$TMP" 2>/dev/null || printf '%s' "$TMP")/not-a-dir/sub")" "空"
 rm -f "$TMP/not-a-dir"
-# ---- 写回执状态机（§7.1/§7.2 契约） ----
-check "warn 已写入不误报失败" "$(run UserPromptSubmit "记：warn receipt fact sentence。" "$CFG_ON" warn)" "含:Saved with warnings"
-check "warn 回执附引擎警告摘要" "$(run UserPromptSubmit "记：warn receipt fact sentence。" "$CFG_ON" warn)" "含:parent (cause) cannot be resolved"
-check "warn 不引导重发" "$(run UserPromptSubmit "记：warn receipt fact sentence。" "$CFG_ON" warn)" "不含:did not accept"
-check "warn 仍给 retitle 精修入口" "$(run UserPromptSubmit "记：warn receipt fact sentence。" "$CFG_ON" warn)" "含:retitle eeee1111"
-check "pending 保留建议动作merge" "$(run UserPromptSubmit "记：pend receipt fact sentence。" "$CFG_ON" pending)" "含:--merge-ids"
-check "坏回执归为unknown" "$(run UserPromptSubmit "记：silent receipt fact sentence。" "$CFG_ON" silent)" "含:store unknown"
-check "unknown 禁止重发" "$(run UserPromptSubmit "记：silent receipt fact sentence。" "$CFG_ON" silent)" "含:Do NOT resend"
-check "unknown 不误报失败" "$(run UserPromptSubmit "记：silent receipt fact sentence。" "$CFG_ON" silent)" "不含:did not accept"
-# ---- 复审 R2#2 反例：show 回 ok 但 details 非 dict → 回读降级 unavailable，不吞已写回执 ----
-check "details为数组不吞Saved回执" "$(run UserPromptSubmit "记：bad details array fact sentence。" "$CFG_ON" show_badetails)" "含:【respire · stored】"
-check "details为数组回执标unavailable" "$(run UserPromptSubmit "记：bad details array fact sentence。" "$CFG_ON" show_badetails)" "含:Read-back unavailable"
-check "details为字符串不吞Saved回执" "$(run UserPromptSubmit "记：bad details string fact sentence。" "$CFG_ON" show_strdetails)" "含:【respire · stored】"
-check "details为字符串不误报失败" "$(run UserPromptSubmit "记：bad details string fact sentence。" "$CFG_ON" show_strdetails)" "不含:did not accept"
+# ---- Explicit prefixes stay pending; legacy receipt helper coverage is in test_ci.py. ----
+for mode in ok warn pending silent show_badetails show_strdetails; do
+  before="$(calls_n)"
+  out="$(run UserPromptSubmit "记：prefix placement fact sentence" "$CFG_ON" "$mode")"
+  check "prefix pending ($mode)" "$out" "含:store pending"
+  check "prefix not written ($mode)" "$out" "含:nothing was written"
+  check "prefix placement order ($mode)" "$out" "含:update > merge > attach > new"
+  check "prefix parent required ($mode)" "$out" "含:remain pending"
+  check "prefix zero engine calls ($mode)" "$( [ "$(calls_n)" = "$before" ] && echo SAME || echo CALLED )" "含:SAME"
+done
 echo "== ② 日志留痕与脱敏 =="
 run SessionStart >/dev/null
 run UserPromptSubmit "我的密码是 password: hunter2 这算敏感吗" >/dev/null
@@ -313,7 +309,7 @@ if [ "$WITH_STORE" = 1 ]; then
   if printf '%s' "$OUT" | grep -qF "store pending"; then
     PASS=$((PASS+1)); echo "SKIP  写探针判重待决（实时库判重门收紧，回执路径由桩套件覆盖）"
   else
-    check "真库落库回执" "$OUT" "含:【respire · stored】"
+    check "真库落库回执" "$OUT" "含:store pending"
   fi
   SID="$(printf '%s' "$OUT" | grep -oE 'retitle [0-9a-f]{8}' | head -1 | awk '{print $2}')"
   if printf '%s' "$OUT" | grep -qF "store pending"; then
@@ -331,7 +327,7 @@ for x in (d.get("details") or []):
       FAIL=$((FAIL+1)); echo "FAIL  写探针未 recall 到（未清理，需手工 forget）"
     fi
   fi
-elif [ -n "$RSRS" ]; then
+elif [ -n "$RSRS" ] && [ -x "$RSRS" ]; then
   echo "== ②′ 真机 rsrs 只读分支（跳过写） =="
   REAL_OUT="$(RESPITE_CONFIG="$CFG_ON" RESPITE_LOG="$TMP/real.log" "$PY3" "$ROOT/hooks/respire.py" SessionStart)"
   check "真机 SessionStart 注入简则" "$REAL_OUT" "含:respire memory layer"
