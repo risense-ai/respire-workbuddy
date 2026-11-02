@@ -279,21 +279,36 @@ else: sys.exit(1)
         output = self.positive_control()
         self.assertIn('[0.90] spy', output)
         before = list(self.recorded())
-        for command in ["rsrs remember fact --force", "rsrs remember 'body --parent dddddddd'",
-                        "rsrs --client-only --json remember fact", "rsrs update deadbeef --clear-parent",
+        for command in ["rsrs remember fact --force", "rsrs remember 'body --parent dddddddd' --importance important",
+                        "rsrs --client-only --json remember fact --importance important", "rsrs update deadbeef --clear-parent",
                         "echo ok; rsrs remember fact", "echo ok\nrsrs remember fact",
                         "rsrs remember fact --parent none", "rsrs remember fact --parent $P",
-                        ">out rsrs remember fact", "echo $(rsrs remember fact)", "npx rsrs remember fact"]:
+                        ">out rsrs remember fact", "echo $(rsrs remember fact)", "npx rsrs remember fact --importance important",
+                        "rsrs >out.log remember fact --importance important --force",
+                        "rsrs remember combined --merge-ids aaaabbbb --importance trivial",
+                        "rsrs --model-task-id task --progress-id progress remember fact --importance important",
+                        'echo >"$(rsrs remember fact --force)"',
+                        "echo " + chr(96) + "rsrs remember fact --force" + chr(96)]:
             denied = json.loads(self.call(event="PreToolUse", tool_input={"command": command}))
             decision = denied["hookSpecificOutput"]
             self.assertEqual(decision["permissionDecision"], "deny")
             self.assertNotIn(command, decision["permissionDecisionReason"])
         self.assertEqual(self.recorded(), before)
-        for command in ["rsrs recall remember --titles --json", "echo hello", "rsrs status --json", "echo 'rsrs remember fact --force'"]:
+        upgrade = json.loads(self.call(event="PreToolUse",
+            tool_input={"command": "rsrs update dddddddd --importance important"},
+            extra_env={"TEST_EXPECTED_ARGV": json.dumps([[str(self.engine), "--client-only", "show", "dddddddd", "--json"]])}))
+        self.assertEqual(upgrade["hookSpecificOutput"]["permissionDecision"], "deny")
+        for command in ["rsrs recall remember --titles --json", "echo hello", "rsrs status --json", "echo 'rsrs remember fact --force'",
+                        "rsrs remember --help", "rsrs remember diary"]:
             self.assertEqual(self.call(event="PreToolUse", tool_input={"command": command}), "")
         native = json.loads(self.call(event="PreToolUse", tool_name="respire_remember",
                                       tool_input={"parent": "dddddddd", "force": True}))
         self.assertEqual(native["hookSpecificOutput"]["permissionDecision"], "deny")
+        for name in ["memory_remember", "mcp__rsrs__memory_remember"]:
+            native = json.loads(self.call(event="PreToolUse", tool_name=name,
+                tool_input={"importance": "important", "parent": "dddddddd"}))
+            self.assertEqual(native["hookSpecificOutput"]["permissionDecision"], "deny")
+            self.assertIn("configured CLI", native["hookSpecificOutput"]["permissionDecisionReason"])
         spec = importlib.util.spec_from_file_location("guard_fixture", ROOT / "hooks" / "respire.py")
         hook = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(hook)
@@ -301,9 +316,24 @@ else: sys.exit(1)
             "summary": {"id": "dddddddddddddddd"}, "details": {"entry": {
                 "id": "dddddddddddddddd", "title": "parent", "content": "parent body"}}}), "")
         self.assertIsNone(hook.guard_memory_tool("PowerShell", {"command": "rsrs remember fact --parent dddddddd --project p --tags t --type context --summary s"}, lambda parent: True))
+        self.assertIsNone(hook.guard_memory_tool("Bash", {"command": 'rsrs remember "CPU dropped 50%" --importance important --parent dddddddd'}, lambda parent: True))
+        self.assertIsNone(hook.guard_memory_tool("Bash", {"command": 'rsrs remember ">" --importance important --parent dddddddd'}, lambda parent: True))
+        self.assertIsNone(hook.guard_memory_tool("Bash", {"command": "rsrs update dddddddd --importance important"}, lambda parent: True, lambda target: True))
         with mock.patch.object(hook, "run_rsrs", return_value=good) as show:
             self.assertTrue(hook.parent_exists("fixture", "dddddddd"))
             show.assert_called_once_with("fixture", ["--client-only", "show", "dddddddd", "--json"], 3)
+        target = json.loads(good.stdout)
+        target["details"]["entry"]["parent_id"] = "eeeeeeeeeeeeeeee"
+        parent = json.loads(good.stdout)
+        parent["summary"]["id"] = parent["details"]["entry"]["id"] = "eeeeeeeeeeeeeeee"
+        with mock.patch.object(hook, "run_rsrs", side_effect=[
+                subprocess.CompletedProcess([], 0, json.dumps(target), ""),
+                subprocess.CompletedProcess([], 0, json.dumps(parent), "")]) as show:
+            self.assertTrue(hook.update_parent_exists("fixture", "dddddddd"))
+            self.assertEqual(show.call_count, 2)
+        with mock.patch.object(hook, "run_rsrs", return_value=good) as show:
+            self.assertFalse(hook.update_parent_exists("fixture", "dddddddd"))
+            self.assertEqual(show.call_count, 1)
         for result in [subprocess.CompletedProcess([], 1, good.stdout, ""), subprocess.CompletedProcess([], 0, "{}", "")]:
             with mock.patch.object(hook, "run_rsrs", return_value=result):
                 self.assertFalse(hook.parent_exists("fixture", "dddddddd"))

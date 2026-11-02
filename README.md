@@ -8,7 +8,9 @@
 
 `PreToolUse` 在 WorkBuddy 执行工具前检查 Bash、PowerShell、execute_command 与可见的 rsrs/respire 写工具。important 新条缺父节点、强写、清空父节点，以及父节点无效或核验超时，都会收到 `permissionDecision: deny`，命令不会执行。父节点只读核验使用 `--client-only show --json`，上限 3 秒；拒绝以 JSON 和退出码 0 返回，避免 Python 回退链吞掉结果。
 
-当前 CLI 的 `update` 未公开 `--parent` / `--clear-parent`；钩子拒绝这些参数属于协议防御，不代表已经验证 CLI 能执行清父操作。将无父节点的 trivial 条目升级为 important，仍由 CLI/Core 写前门检查。
+当前 CLI 的 `update` 未公开 `--parent` / `--clear-parent`；钩子拒绝这些参数属于协议防御，不代表已经验证 CLI 能执行清父操作。`update --importance important` 会先只读核验目标及其现存父节点，没有有效父节点则拒绝；每次读取上限 3 秒，两次核验最多 6 秒。`remember --merge-ids` 即使请求 trivial，也必须显式指定并核验父节点。CLI 省略 importance 时仍按 trivial 处理，`remember --help` 不拦截。
+
+已知 MCP/native 写工具无法证明其目标库与本地 CLI 相同，因此直接拒绝并引导显式 CLI，不把本地 show 当作远程库的证明。
 
 复合或动态的已识别写命令必须拆成单条明确命令。普通读取与其他工具不受影响。任意脚本、别名和外部进程超出插件可见范围，仍须由 CLI/Core 的写前门兜底；插件不自动选父节点，也不代写。
 

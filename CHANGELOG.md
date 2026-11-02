@@ -3,7 +3,8 @@
 ## 0.4.10 — 2026-11-02
 
 - 注册真实 `PreToolUse` 写前门，使用 WorkBuddy 的 `permissionDecision: deny` 拒绝危险的可见 rsrs 写入。
-- important 新条必须有可只读核验的父节点；禁止 force、清父节点，且不可解析写入不再静默放行。
+- important 新条必须有可只读核验的父节点；禁止 force、清父节点参数，且不可解析写入不再静默放行；保留 CLI 默认 trivial、help 和正文中的字面字符。
+- 结构写另行核验：merge 必须显式挂父，important 更新必须已有有效父节点；未绑定目标库的 MCP/native 写工具直接拒绝。
 - 拒绝返回 JSON 和退出码 0；保留普通读取与其他工具，并说明 CLI/Core 兜底边界。
 
 ## 0.4.9 — 2026-11-02
