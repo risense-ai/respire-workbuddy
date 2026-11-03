@@ -1,0 +1,18 @@
+{
+  "mcpServers": {
+    "respire": {
+      "type": "stdio",
+      "command": "npx",
+      "args": [
+        "-y",
+        "rsrs-cli@latest",
+        "mcp"
+      ],
+      "runtime": {
+        "type": "node",
+        "version": ">=18"
+      },
+      "timeout": 60000
+    }
+  }
+}
