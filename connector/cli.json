@@ -4,9 +4,9 @@
     "version": ">=18"
   },
   "init": {
-    "darwin": "npm install -g @rsrsai/cli@latest",
-    "linux": "npm install -g @rsrsai/cli@latest",
-    "win32": "npm install -g @rsrsai/cli@latest"
+    "darwin": "npm install -g rsrs-cli@latest",
+    "linux": "npm install -g rsrs-cli@latest",
+    "win32": "npm install -g rsrs-cli@latest"
   },
   "versionCheck": {
     "command": {
