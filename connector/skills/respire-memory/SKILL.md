@@ -1,12 +1,21 @@
 ---
 name: respire-memory
 version: 1.0.0
-description: respire (rsrs) local encrypted memory, exposed as MCP tools — memory_recall for semantic search, memory_remember to store after dedup, memory_show/chain/tree to read bodies and causal chains, memory_diary* for date-anchored fragments. Use when the user mentions memory, recall, what happened last time, save this, forget, sync, or organize memory. Triggers: memory, recall, remember, store memory, forget, sync, 记忆, 翻忆, 查上次, 记下来, 存记忆, 忘掉, 同步, 整理记忆.
+description: respire (rsrs) local encrypted memory, exposed as MCP tools. ALWAYS recall first — run memory_recall at the start of every turn before answering, then memory_remember at the end if anything new happened. Also memory_show/chain/tree to read bodies and causal chains, memory_diary* for date-anchored fragments. Triggers: every turn, memory, recall, remember, what happened last time, save this, 记忆, 翻忆, 查上次, 记下来, 存记忆, 整理记忆.
 ---
 
 # respire memory · MCP playbook
 
 Memory lives encrypted on this device and works offline; cloud sync uploads ciphertext only. **These are MCP tools provided by the respire connector — call the tools directly. Do not shell out to `rsrs`.**
+
+## Trigger (hard — this is why the connector exists)
+
+1. **On every user turn, before giving any substantive answer**, call `memory_recall` once with `query` set to 2–3 keywords from this turn (nouns + intent, plus an English synonym if the Chinese term is ambiguous) and `limit=5`.
+2. Hits → `memory_show` the full body, then cite it as memory (not as a current fact). No hits → answer directly; **do not retry with the same query**.
+3. Skip only for bare social turns with no referent (`你好`, `谢谢`, `好的`).
+4. **At the end of the turn**, if a new fact / decision / agreement / lesson / pitfall appeared, `memory_remember` it (rules below). If nothing new happened, store nothing.
+
+Without step 1 the memory store is dead weight — the tools sit unused. Do not wait for the user to say "recall".
 
 ## Prerequisites
 

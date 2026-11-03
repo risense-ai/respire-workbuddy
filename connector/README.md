@@ -17,25 +17,16 @@
 
 ## 本机试用（未上架前）
 
-往 `~/.workbuddy/mcp.json` 写一条（该文件是官方「自定义连接器 → 配置 MCP」读写的同一个）：
-
-```json
-{
-  "mcpServers": {
-    "respire": {
-      "type": "stdio",
-      "command": "npx",
-      "args": ["-y", "rsrs-cli@latest", "mcp"],
-      "runtime": { "type": "node", "version": ">=18" },
-      "timeout": 60000
-    }
-  }
-}
+```bash
+python3 connector/install_local.py              # 装 / 升级（幂等）
+python3 connector/install_local.py --uninstall  # 卸（备份保留）
 ```
 
-写完**完全退出并重开 WorkBuddy**，`自定义连接器 → 我的 MCP` 里应出现 `respire`（16 个工具）。也可在该对话框点「配置 MCP」直接粘贴——面板保存会立即重载，不必重启。
+装完**完全退出并重开 WorkBuddy**。
 
-要撤：把上面这条从 `mcpServers` 删掉即可（改动前先备份该文件）。
+**别只往 `~/.workbuddy/mcp.json` 塞一条 server**——那样只注册了「自定义 MCP」，16 个工具能用，但随包的 `SKILL.md` **不会加载**，模型看不到「每轮先召回」的操作法，记忆就是死的。`install_local.py` 按连接器包布局落盘七处（市场清单、连接器包、插件缓存、安装条目与启用、连接器索引与卡片与图标、启用态 `{bound,enabled}`、并摘掉 `mcp.json` 里的重复条目），工具与技能同时生效。
+
+改动前一律备份到 `~/.workbuddy/.bak-install/connector-mcp-<时间戳>/`。
 
 ## 测试（提交前必跑）
 
@@ -60,8 +51,8 @@ python3 connector/validate_connector.py --offline  # 只查静态，不碰外部
 ## 三层验收（从弱到强）
 
 1. **契约层**：`validate_connector.py` 全绿（29 项）
-2. **平台层**：重启后 `我的 MCP` 出现 `respire`，状态为已连接、16 个工具启用
-3. **功能层**：随便问一句「翻一下我以前关于 X 的记忆」，看模型是否调 `memory_recall`
+2. **平台层**：重启后连接器页出现「睿思记忆」、状态已连接；技能列表里出现 `respire-memory`（**技能没出现＝只装了 MCP，没装包，记忆不会被触发**）
+3. **触发层**：**不提任何记忆相关的词**，直接问一件具体的事（如「上次那个部署怎么修的」），看模型是否**主动**先调 `memory_recall`——调了才算通；要你明说「查一下记忆」才调，说明技能没加载
 
 ## 提交官方开放平台
 
