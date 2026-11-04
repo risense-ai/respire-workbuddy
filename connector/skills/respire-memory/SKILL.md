@@ -1,49 +1,72 @@
 ---
 name: respire-memory
-description: respire (rsrs) local encrypted memory playbook: recall for semantic search, remember to store after dedup, show/chain to read full bodies and causal chains, forget to tombstone-delete, sync to synchronize, status to check state. Use when the user mentions memory, recall, what happened last time, save this, forget, sync, or organize memory. Triggers: memory, recall, remember, store memory, forget, sync, 记忆, 翻忆, 查上次, 记下来, 存记忆, 忘掉, 同步, 整理记忆.
+version: 1.0.0
+description: respire (rsrs) local encrypted memory, exposed as MCP tools. EXPLICIT ONLY — call memory_recall when the user asks (记忆, 翻忆, 查上次, recall, 我们之前定的…), never proactively each turn. Store with memory_remember only when the user asks to save. Also memory_show/chain/tree to read bodies and causal chains, memory_diary* for date-anchored fragments. Triggers: 记忆, 翻忆, 查上次, 记下来, 存记忆, recall, what did we decide before, 整理记忆.
 ---
 
-# respire memory · playbook
+# respire memory · MCP playbook
 
-The CLI is `rsrs` (npm package `rsrs-cli`; `@rsrsai/cli` is the same CLI). The memory store is encrypted locally and works offline; cloud sync uploads ciphertext only.
+Memory lives encrypted on this device and works offline; cloud sync uploads ciphertext only. **These are MCP tools provided by the respire connector — call the tools directly. Do not shell out to `rsrs`.**
+
+## Recall trigger (explicit only — hard)
+
+1. **Call `memory_recall` only when the user explicitly asks**: 记忆 / 翻忆 / 查上次 / 之前那个 / 我们怎么定的 / recall / save this / 整理记忆 — or when the turn plainly continues a thread that opened with one of those.
+2. **Do NOT recall proactively.** No `memory_recall` at the start of an unrelated turn, no "just in case" lookups. If the user did not ask for memory, do not touch memory this turn.
+3. On an explicit recall, run `memory_recall` with `query` = 2–3 keywords from what they actually asked, `limit=5`. Hits → `memory_show` the full body, then cite it as memory (not as a current fact). No hits → say so and move on; do not retry the same query.
+4. **Store only when the user asks to save** (`记：`, 记下来, 存一下, save this, or an explicit "把这条记进去"). Never write a memory as a side effect of answering something else.
+
+This is deliberate: automatic per-turn recall and auto-store are noise the user has explicitly rejected. Be silent unless asked.
 
 ## Prerequisites
 
-- Connected (the `User` line of `rsrs status` reads `PASS`). If not connected, ask the user to connect first; never enter their password.
-- Every command takes `--json` for structured output; progress goes to stderr — **never `2>&1`**, or the JSON gets polluted.
+- The respire connector must be connected (its MCP server responds). If it is not, ask the user to connect it in Connector Management; never enter their password.
+- Cloud sync is optional: the store works without login. Login (`rsrs login`, run by the user) is only needed to sync across devices.
 
-## Commands
+## Store placement rules (hard)
 
-| Purpose | Command | Key parameters |
+1. **Judge before store.** `memory_remember` without `force` runs an internal recall first — high similarity means merge (`merge_ids`), medium means attach (`parent`). Never bypass with `force`.
+2. **Read before you write.** Before any memory write, read the same-topic candidates in full with `memory_show`. Apply **update > merge > attach > new** in that order.
+3. **A new `important` record MUST have a real, reasonable parent whose full body you have read.** Only after that review may you call `memory_remember` with `importance=important` and `parent=<id>`. If no such parent exists, leave it pending.
+4. **DO NOT** guess a parent, pass `force=true`, or downgrade importance to bypass rule 3. **DO NOT** write in read-only/off mode or change that mode to enable a write.
+5. **Title must be a complete fact sentence**: subject + action + result. Not "discussion about connectors".
+6. **After a real write, verify** with `memory_show` on the returned id — check id, title, and full body. If the outcome is unknown, **do not retry automatically and do not claim success**; verify read-only.
+
+## Tools
+
+| Tool | Parameters (*required) | Purpose |
 | --- | --- | --- |
-| Semantic recall | `rsrs recall "<project name + keywords>" --limit 5 --json` | `--titles` for short id + title only; `--limit N` for count |
-| Store | `rsrs remember "<content>" --title "<fact sentence>" --importance important --parent <reviewed-parent-id> --json` | `--parent <id>` attaches under a record; `--merge-ids "a,b"` merges; new important records require a reviewed reasonable parent; no force bypass |
-| Read full body | `rsrs show <short-id> --json` | short id = first 8 chars |
-| Causal chain | `rsrs chain <id> --depth 3 --json` | ancestors + record + descendants in one call |
-| Dedup candidates | `rsrs candidates "<content>" --json` | check same-subject records before storing |
-| List | `rsrs list --limit 10 --json` | `--since <date>` lower bound |
-| Retitle | `rsrs retitle <short-id> --title "<new title>"` | title must be "subject + action + result" |
-| Delete | `rsrs forget <id> --json` | tombstone delete, propagated by sync; `restore <full-id>` revives |
-| Sync | `rsrs sync --json` | autosync runs normally; manual sync blocks |
-| Status | `rsrs status --json` | login state, record counts, index state |
-| Full workflow | `rsrs prompt` | the complete archiving policy (placement, grading, three-section body), on demand |
+| `memory_recall` | query*, limit, related | Semantic recall (local BGE + keyword fusion, no network) |
+| `memory_remember` | content*, title, parent, merge_ids, force, importance, type, see_also, supersedes | Store a memory (judge-then-store) |
+| `memory_show` | id* | Full body, including causal context (never truncated) |
+| `memory_chain` | id*, depth | Ancestors + this entry + descendants in one call |
+| `memory_tree` | outline, from, depth | Causal forest / subtree / full-depth outline |
+| `memory_attach` | id*, parent* | Explicit reparent (no judging, direct) |
+| `memory_update` | id*, content, title, importance, kind, tags | Edit an existing record |
+| `memory_list` | limit | Recent records |
+| `memory_status` | — | Store status (data dir, session, counts) |
+| `memory_taxonomy` | — | The 23 built-in catalog roots |
+| `memory_history` | id, limit | Change audit (create/update/delete/restore) |
+| `memory_diary` | date, from, to, contains, limit | Diary time chain (trivial zone included) |
+| `memory_diary_search` | query*, limit, mode, max_chars | Cross-date diary fragments; scores are relevance, not credibility |
+| `memory_diary_fragment` | fragment_id*, source_id*, max_chars, neighbors | Bounded fragment read; rejects changed/missing locators |
+| `memory_extract` | confirm, dry_run, since, limit, parent, importance | Batch-import local coding-agent sessions — **always `dry_run=true` first** |
+| `memory_query_log_mark` | ids*, good, bad | Self-grade recall candidates (chosen / rejected) |
 
 ## Common flows
 
-1. **Before answering**: `recall` with 2–3 different wordings (synonyms, hypernyms, English); on hits, `show` the full body before citing it.
-2. **Storing**: Before any memory write, you MUST read rsrs prompt, recall same-topic candidates, and use rsrs show <id> to read their full bodies. Apply update > merge > attach > new in that order; use the existing CLI for updates/merges. A new important record MUST have a real, reasonable parent whose full body you have read. ONLY AFTER that review may you use rsrs remember with --importance important --parent <id>; if no such parent is available, remain pending. DO NOT guess a parent, use --force, or downgrade importance to bypass this requirement. DO NOT write in read-only/off mode or change that mode to enable a write. Use literal body markers required by engine policy; DO NOT translate them. The title MUST be a complete subject + action + result fact sentence. After an actual write, you MUST use rsrs show to verify the id, title, and full body. If the actual write outcome is unknown, DO NOT retry automatically or claim success. Verify read-only; DO NOT resend the write.
-3. **Organizing**: `rsrs tree --outline --json` to view the tree → `rsrs resort --spec '{\"ops\":[{\"id\":\"child\",\"parent\":\"parent\"}]}' --go` to re-attach in bulk (dry-run by default).
+1. **Explicit recall**: user asks → `memory_recall` with 2–3 different wordings of *what they asked* (synonyms, hypernyms, English) → on hits, `memory_show` the full body before citing it. Not asked → skip entirely.
+2. **Storing** (only when asked to save): recall same-topic candidates → `memory_show` them → apply update > merge > attach > new → after writing, `memory_show` the id to verify.
+3. **Organizing**: `memory_tree` with `outline=true` to see the tree → `memory_attach` to re-attach in bulk → `memory_history` to review.
 
-## Return envelope
+## Envelope and boundaries
 
-All `--json` commands return `{status, summary, items, details, errors}`:
-
-- Failures are `status:"fail"` plus `errors[]`, and the exit code may still be 0 — **judge by status, not the exit code**.
-- recall hits live in `details[]`: `score` (relevance, not confidence), `id` (full id), `title`, `superseded_by`.
-- ok/warn with a valid id means written; DO NOT resend. Pending means nothing was written. If an actual write outcome is unknown, DO NOT resend or claim success; verify read-only.
+- Recall hits carry a `score`: **relevance, not confidence**. Never treat it as evidence; `memory_show` the original before citing.
+- A single memory is not a current fact — it can be stale. Re-verify anything time-sensitive against live sources.
+- `memory_extract` writes in bulk: `dry_run=true` first, then `confirm=true`.
+- `memory_diary_search` scores are relevance, not credibility.
 
 ## Red lines
 
 - Never put passwords, ID numbers, phone numbers, card numbers, or private keys into memory bodies or query terms; record only where they are stored.
-- Confirm before deleting; once `forget` propagates to the cloud, `restore <full-id>` is required to revive it.
-- Never treat recall scores as confidence; `show` the original text before citing any memory.
+- Confirm before deleting. Once a tombstone propagates to the cloud, reviving needs the full id — **when unsure, do not delete**.
+- Never present a memory as an established current fact without checking it.

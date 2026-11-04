@@ -1,42 +1,39 @@
-# respire 连接器（WorkBuddy）
+# respire 连接器（WorkBuddy · MCP 形态）
 
-把 `rsrs` 记忆库接成 WorkBuddy 的 **CLI 连接器**：连接器页可见、技能 `respire-memory` 随装随用。
-本目录是官方开放平台（open.workbuddy.cn）提交格式的源，也能一键装到本机先行验证。
+把 `rsrs` 记忆库接成 WorkBuddy 连接器：模型直接拿到 16 个 `memory_*` 原生工具（召回、落库、因果链、日记……），不用拼 shell。
+本目录是官方开放平台（open.workbuddy.cn）提交格式的源，也能在上架前先挂到本机试用。
 
 ## 目录
 
 | 文件 | 用途 |
 | --- | --- |
-| `connector-meta.json` | 市场条目（id/中英名/描述/各 3 条示例/type=cli）——提交审核的主体 |
-| `cli.json` | 平台命令映射：`init` / `versionCheck` / `auth` / `unAuth` / `status` + `statusMatch` |
+| `connector-meta.json` | 市场条目（中英名/描述/各 3 条示例/`type=mcp`/`minWorkbuddyVersion=5.0.0`）——提交审核的主体 |
+| `mcp.json` | MCP Server 配置：`stdio` ＋ `npx -y rsrs-cli@latest mcp` ＋ `runtime node >=18` |
 | `icon.svg` | 卡片图标 |
-| `skills/respire-memory/SKILL.md` | 给模型看的操作法（技能名须与 `frontmatter.name` 一致） |
-| `install_local.py` | 本机安装/卸载（桌面端未上架时用） |
+| `skills/respire-memory/SKILL.md` | 给模型看的操作法（落库规矩、16 工具表、红线） |
+| `validate_connector.py` | 提交前自检（29 项，含真机 MCP 握手） |
 
-## 本机安装（未上架前）
+**为什么是 MCP 而不是 CLI**：MCP 给模型原生工具，参数与返回值有标准描述，不依赖模型自己拼命令行；`npx` 首次运行自动拉包，用户无需先装 CLI。CLI 形态（`cli.json` ＋ `statusMatch`）的实现留在 git 历史里，需要时可取回。
+
+**召回只认显式指令**：技能里写死了「只有用户明说要查记忆才调 `memory_recall`，不许每轮自动召回、不许顺手落库」。理由是无差别自动召回＝噪声注入（与 `rsrs related` 从「每查附带」改成「确认命中后再调」同一个判断）——用户要查的时候一句话就查，不要的时候工具安静待着。
+
+## 本机试用（未上架前）
 
 ```bash
-python3 connector/install_local.py              # 装 / 升级，幂等
-python3 connector/install_local.py --uninstall  # 卸（保留市场注册，便于重装）
+python3 connector/install_local.py              # 装 / 升级（幂等）
+python3 connector/install_local.py --uninstall  # 卸（备份保留）
 ```
 
-装完**完全退出并重开 WorkBuddy**——连接器与技能都在启动时装载。
+装完**完全退出并重开 WorkBuddy**。
 
-脚本落盘六处（都以 `~/.workbuddy` 为根）：
+**别只往 `~/.workbuddy/mcp.json` 塞一条 server**——那样只注册了「自定义 MCP」，16 个工具能用，但随包的 `SKILL.md` **不会加载**，模型看不到「每轮先召回」的操作法，记忆就是死的。`install_local.py` 按连接器包布局落盘七处（市场清单、连接器包、插件缓存、安装条目与启用、连接器索引与卡片与图标、启用态 `{bound,enabled}`、并摘掉 `mcp.json` 里的重复条目），工具与技能同时生效。
 
-1. `plugins/known_marketplaces.json` —— 注册 directory 型市场 `risense-respire-connector`
-2. `plugins/cache/risense-respire-connector/respire-connector/<版本>/` —— 插件本体 ＋ `.codebuddy-directory-source.json`
-3. `plugins/installed_plugins.json` —— 安装条目 `respire-connector@risense-respire-connector`
-4. `settings.json` → `enabledPlugins` —— 启用插件
-5. `connectors-marketplace/connectors/respire-connector/` ＋ `.codebuddy-connector/connectors.json` ＋ `icons/respire-connector.svg` —— 连接器页的卡片与索引
-6. `connectors/<uid>/connector-states.json` —— 启用态 `{bound:true, enabled:true}`（v4 为准，v3 仅镜像）
-
-为什么要脚本而不是命令：`codebuddy plugin` CLI 在桌面端运行期间会卡死（子进程 `epoll` 等主进程 IPC，`exit=124`），插件自带 hooks 也不被加载——只能直接写上述注册表。改动前一律备份到 `~/.workbuddy/.bak-install/connector-<时间戳>/`。
+改动前一律备份到 `~/.workbuddy/.bak-install/connector-mcp-<时间戳>/`。
 
 ## 测试（提交前必跑）
 
 ```bash
-python3 connector/validate_connector.py            # 全检（会真跑 status 探活）
+python3 connector/validate_connector.py            # 全检（会真跑 MCP 握手）
 python3 connector/validate_connector.py --offline  # 只查静态，不碰外部命令
 ```
 
@@ -44,48 +41,43 @@ python3 connector/validate_connector.py --offline  # 只查静态，不碰外部
 
 | 层 | 查什么 | 不过的后果 |
 | --- | --- | --- |
-| 包结构 | meta/cli/icon/skills 齐；`SKILL.md` 的 `name` 与目录名一致；description 够长 | 模型选不中技能，目录扫不出来 |
-| 市场条目 | 中英名/描述/各 2–5 条示例/`type` | 审核退回补材料 |
-| 命令契约 | `init`/`auth`/`unAuth`/`status` 三平台齐；`statusMatch` 是合法正则且**能命中真实输出**；`versionCheck` 版本达标 | 用户装上了却显示「未连接」或直接被判 needsUpgrade 跳过 |
+| 市场条目 | 中英名/描述 20–100 字/各 2–5 条示例/`source` 是 kebab-case/`auth_mode` 合法 | 审核退回补材料 |
+| 包结构 | meta/mcp/icon/skills 齐；`SKILL.md` 的 `name` 与目录名一致；description 够长 | 模型选不中技能，目录扫不出来 |
+| 接入契约 | `mcpServers` 只有一个 Server；stdio 有 `command`；**真机握手拿到 `serverInfo` 与 `tools/list`**；Skill 覆盖 ≥ 半数工具 | 连不上，或连上了但 AI 不会用 |
 | 打包 | zip 顶层是 `connector-meta.json`，不能多套一层目录 | 上传解析失败 |
 
-**为什么单独测 `statusMatch`**：这是 CLI 连接器唯一的「连接判定」依据——平台只跑 `status` 命令再拿正则撞输出，撞不上就永远显示未连接，而命令本身是成功的，最难排查。
+**为什么单独测握手**：MCP 连接器的「连接成功」就是握手本身——`initialize` 不回 `serverInfo`、`tools/list` 拿不到工具，平台会一直显示连接失败，而 `npx` 拉包失败的报错藏在 stderr 里最难查。
+
+**为什么测 Skill 覆盖率**：MCP 方案里 Skill 是可选的，但一旦写了却漏掉大半工具，模型会只用它读到的那几个。
 
 ## 三层验收（从弱到强）
 
-1. **契约层**：`validate_connector.py` 全绿（26 项）
-2. **平台层**：重启后在应用日志里应看到
-   ```
-   [ConnectorService] CLI auto-connect: <id> authenticated, updating to connected
-   [ConnectorService] CLI Connected: <id>
-   ```
-   （没这两行，说明平台压根没把它当 cli 连接器处理）
-3. **功能层**：按 SKILL.md 的命令手跑一次，确认 `--json` 信封正常
-   ```bash
-   rsrs --client-only recall "关键词" --titles --limit 3 --json
-   ```
-
-
+1. **契约层**：`validate_connector.py` 全绿（29 项）
+2. **平台层**：重启后连接器页出现「睿思记忆」、状态已连接；技能列表里出现 `respire-memory`（**技能没出现＝只装了 MCP，没装包，模型不知道有这些工具**）
+3. **触发层（双向）**：
+   - **不提任何记忆相关的词**，直接问一件具体的事（如「上次那个部署怎么修的」）→ 模型**不该**调 `memory_recall`，直接作答。调了＝没守住显式边界
+   - 明确说「翻一下我以前关于部署的记忆」→ 模型**必须**调 `memory_recall` 并 `memory_show` 原文再引。不调＝技能没加载
 
 ## 提交官方开放平台
 
 ```bash
-cd connector && zip -qr ../respire-connector-1.0.0.zip connector-meta.json cli.json icon.svg skills
+cd connector && zip -qr ../respire-connector-1.0.0.zip connector-meta.json mcp.json icon.svg skills
 ```
 
-到 open.workbuddy.cn 控制台 → 连接器 → 新建 → 上传 zip。审核关注两处：
+到 open.workbuddy.cn 控制台 → 连接器 → 新建 → 上传 zip。审核关注三处：
 
-1. `auth` 命令须能在 10 秒内输出登录 URL 且不依赖本地回调（本包用 `rsrs login --oauth --no-open`）
-2. 资质：个人认证能否发连接器，以创建页实际口径为准（官方文与第三方指南口径不一）
+1. `minWorkbuddyVersion=5.0.0`——`mcp.json` 的 `runtime` 字段要 v5.0.0 起（本机 5.6.2 已验）
+2. `auth_mode` 省略＝官方口径「无需认证，点击连接即可用」——rsrs 本地优先、离线可用，平台侧确实不涉及用户身份；跨设备同步由用户自己跑 `rsrs login`，连接器不经手口令
+3. 资质：个人认证能否发连接器，以创建页实际口径为准（官方文与第三方指南口径不一）
 
 ## 命名
 
-- 市场 id / `source`：`respire`（提交用）
-- 本地插件名：`respire-connector`——不能叫 `respire`，会与仓库里的记忆插件（`plugins/respire`）撞名
+- 市场 `source`：`respire`（全局唯一，kebab-case）
+- 本地插件名（若走插件装载）：`respire-connector`——不能叫 `respire`，会与仓库里的记忆插件 `plugins/respire` 撞名
 - 技能名：`respire-memory`
 
 ## 已知边界
 
-1. `init` 走 `npm i -g @rsrsai/cli@latest`；本机若已是自建二进制（`~/.local/bin/rsrs`），`versionCheck` 通过即不会触发 `init`
-2. 官方市场刷新（`connectors-marketplace` 重拉 zip）会覆盖索引与镜像包，重跑 `install_local.py` 即可复原
-3. 该连接器与平台自带「记忆工程」定位重叠，上架文案需说明差异（本地加密、可离线、可自建同步）
+1. `npx -y rsrs-cli@latest mcp` 首次运行要拉包（约几秒），`timeout` 给到 60000 ms；已装过则走缓存
+2. `mcp.json` 官方只读 `mcpServers` 里**第一个** Server，别往里塞第二个
+3. 该连接器与平台自带「记忆工程」定位重叠，上架文案需说明差异：本地加密、可离线、可自建同步服务
