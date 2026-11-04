@@ -1,21 +1,21 @@
 ---
 name: respire-memory
 version: 1.0.0
-description: respire (rsrs) local encrypted memory, exposed as MCP tools. ALWAYS recall first — run memory_recall at the start of every turn before answering, then memory_remember at the end if anything new happened. Also memory_show/chain/tree to read bodies and causal chains, memory_diary* for date-anchored fragments. Triggers: every turn, memory, recall, remember, what happened last time, save this, 记忆, 翻忆, 查上次, 记下来, 存记忆, 整理记忆.
+description: respire (rsrs) local encrypted memory, exposed as MCP tools. EXPLICIT ONLY — call memory_recall when the user asks (记忆, 翻忆, 查上次, recall, 我们之前定的…), never proactively each turn. Store with memory_remember only when the user asks to save. Also memory_show/chain/tree to read bodies and causal chains, memory_diary* for date-anchored fragments. Triggers: 记忆, 翻忆, 查上次, 记下来, 存记忆, recall, what did we decide before, 整理记忆.
 ---
 
 # respire memory · MCP playbook
 
 Memory lives encrypted on this device and works offline; cloud sync uploads ciphertext only. **These are MCP tools provided by the respire connector — call the tools directly. Do not shell out to `rsrs`.**
 
-## Trigger (hard — this is why the connector exists)
+## Recall trigger (explicit only — hard)
 
-1. **On every user turn, before giving any substantive answer**, call `memory_recall` once with `query` set to 2–3 keywords from this turn (nouns + intent, plus an English synonym if the Chinese term is ambiguous) and `limit=5`.
-2. Hits → `memory_show` the full body, then cite it as memory (not as a current fact). No hits → answer directly; **do not retry with the same query**.
-3. Skip only for bare social turns with no referent (`你好`, `谢谢`, `好的`).
-4. **At the end of the turn**, if a new fact / decision / agreement / lesson / pitfall appeared, `memory_remember` it (rules below). If nothing new happened, store nothing.
+1. **Call `memory_recall` only when the user explicitly asks**: 记忆 / 翻忆 / 查上次 / 之前那个 / 我们怎么定的 / recall / save this / 整理记忆 — or when the turn plainly continues a thread that opened with one of those.
+2. **Do NOT recall proactively.** No `memory_recall` at the start of an unrelated turn, no "just in case" lookups. If the user did not ask for memory, do not touch memory this turn.
+3. On an explicit recall, run `memory_recall` with `query` = 2–3 keywords from what they actually asked, `limit=5`. Hits → `memory_show` the full body, then cite it as memory (not as a current fact). No hits → say so and move on; do not retry the same query.
+4. **Store only when the user asks to save** (`记：`, 记下来, 存一下, save this, or an explicit "把这条记进去"). Never write a memory as a side effect of answering something else.
 
-Without step 1 the memory store is dead weight — the tools sit unused. Do not wait for the user to say "recall".
+This is deliberate: automatic per-turn recall and auto-store are noise the user has explicitly rejected. Be silent unless asked.
 
 ## Prerequisites
 
@@ -54,8 +54,8 @@ Without step 1 the memory store is dead weight — the tools sit unused. Do not 
 
 ## Common flows
 
-1. **Before answering**: `memory_recall` with 2–3 different wordings (synonyms, hypernyms, English); on hits, `memory_show` the full body before citing it.
-2. **Storing**: recall same-topic candidates → `memory_show` them → apply update > merge > attach > new → after writing, `memory_show` the id to verify.
+1. **Explicit recall**: user asks → `memory_recall` with 2–3 different wordings of *what they asked* (synonyms, hypernyms, English) → on hits, `memory_show` the full body before citing it. Not asked → skip entirely.
+2. **Storing** (only when asked to save): recall same-topic candidates → `memory_show` them → apply update > merge > attach > new → after writing, `memory_show` the id to verify.
 3. **Organizing**: `memory_tree` with `outline=true` to see the tree → `memory_attach` to re-attach in bulk → `memory_history` to review.
 
 ## Envelope and boundaries
